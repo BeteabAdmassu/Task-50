@@ -1,6 +1,8 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const baseDir = path.resolve(process.cwd(), "..");
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const fullstackDir = path.resolve(currentDir, "..", "..");
 const nodeEnv = process.env.NODE_ENV || "development";
 
 const defaultJwtSecret = "forgeops-local-dev-secret";
@@ -37,8 +39,8 @@ export const config = {
   maxFailedLogins: 5,
   defaultDndStart: process.env.DEFAULT_DND_START || "21:00",
   defaultDndEnd: process.env.DEFAULT_DND_END || "07:00",
-  uploadDir: process.env.UPLOAD_DIR || path.join(baseDir, "storage", "uploads"),
-  exportDir: process.env.EXPORT_DIR || path.join(baseDir, "storage", "message_exports"),
+  uploadDir: process.env.UPLOAD_DIR || path.join(fullstackDir, "storage", "uploads"),
+  exportDir: process.env.EXPORT_DIR || path.join(fullstackDir, "storage", "message_exports"),
   encryptionKeyHex: process.env.ENCRYPTION_KEY_HEX || defaultEncryptionKey,
   db: {
     host: process.env.DB_HOST || "127.0.0.1",

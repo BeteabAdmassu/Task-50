@@ -54,3 +54,8 @@ $RECYCLE.BIN/
 
 # VS Code (Optional: uncomment if you don't want to share workspace settings)
 # .vscode/
+# =========================
+# Local Storage / Uploads
+# =========================
+storage/
+.tmp/
