@@ -12,6 +12,38 @@ const allowedMimeTypes = new Set(["application/pdf", "image/jpeg", "image/png"])
 const maxBytes = 20 * 1024 * 1024;
 const candidateUploadTokenTtlSeconds = 60 * 60 * 24;
 
+async function getRequiredAttachmentClasses(source, conn = null) {
+  const queryable = conn || pool;
+  const [rows] = await queryable.execute(
+    `SELECT classification
+     FROM application_attachment_requirements
+     WHERE is_required = 1
+       AND (applies_to_source IS NULL OR applies_to_source = ?)
+     ORDER BY classification ASC`,
+    [source || "PORTAL"]
+  );
+  return rows.map((row) => row.classification);
+}
+
+async function evaluateAttachmentCompleteness(candidateId, source, conn = null) {
+  const queryable = conn || pool;
+  const requiredClasses = await getRequiredAttachmentClasses(source, queryable);
+  const [rows] = await queryable.execute(
+    `SELECT classification, COUNT(*) AS count
+     FROM candidate_attachments
+     WHERE candidate_id = ?
+     GROUP BY classification`,
+    [candidateId]
+  );
+  const found = new Set(rows.filter((row) => Number(row.count) > 0).map((row) => row.classification));
+  const missingRequiredClasses = requiredClasses.filter((item) => !found.has(item));
+  return {
+    requiredClasses,
+    missingRequiredClasses,
+    complete: missingRequiredClasses.length === 0
+  };
+}
+
 export async function createCandidateApplication(input, actor) {
   assert(input.fullName, 400, "Full name is required");
   assert(input.dob, 400, "DOB is required");
@@ -62,10 +94,26 @@ export async function createCandidateApplication(input, actor) {
       conn
     });
 
+    const attachmentCompleteness = await evaluateAttachmentCompleteness(
+      appId,
+      input.source || "PORTAL",
+      conn
+    );
+    await writeAudit({
+      actorUserId: actor?.id || null,
+      action: "UPDATE",
+      entityType: "candidate",
+      entityId: appId,
+      beforeValue: { attachmentCompleteness: null },
+      afterValue: { attachmentCompleteness },
+      conn
+    });
+
     return {
       id: appId,
       duplicateFlag: duplicate,
-      uploadToken: issueCandidateUploadToken(appId)
+      uploadToken: issueCandidateUploadToken(appId),
+      attachmentCompleteness
     };
   });
 }
@@ -146,8 +194,9 @@ export async function attachCandidateFile(candidateId, file, actor) {
   assert(file.size <= maxBytes, 400, "File exceeds 20 MB");
   assert(sourcePath, 400, "Upload source path missing");
 
-  const [candidates] = await pool.execute("SELECT id FROM candidates WHERE id = ?", [candidateId]);
+  const [candidates] = await pool.execute("SELECT id, source FROM candidates WHERE id = ?", [candidateId]);
   assert(candidates.length, 404, "Candidate not found");
+  const candidate = candidates[0];
 
   await fs.mkdir(config.uploadDir, { recursive: true });
   const ext = path.extname(originalName || "").toLowerCase();
@@ -182,17 +231,34 @@ export async function attachCandidateFile(candidateId, file, actor) {
     }
   });
 
-  return { id: attachmentId };
+  const attachmentCompleteness = await evaluateAttachmentCompleteness(
+    candidateId,
+    candidate.source || "PORTAL"
+  );
+  await writeAudit({
+    actorUserId: actor?.id || null,
+    action: "UPDATE",
+    entityType: "candidate",
+    entityId: candidateId,
+    beforeValue: null,
+    afterValue: { attachmentCompleteness }
+  });
+
+  return { id: attachmentId, attachmentCompleteness };
 }
 
 export async function getCandidate(candidateId, actor) {
   const [rows] = await pool.execute(
-    `SELECT id, full_name, email, phone, dob_enc, ssn_last4_enc, duplicate_flag, created_at
+    `SELECT id, full_name, email, phone, dob_enc, ssn_last4_enc, duplicate_flag, source, created_at
      FROM candidates WHERE id = ?`,
     [candidateId]
   );
   assert(rows.length, 404, "Candidate not found");
   const row = rows[0];
+  const attachmentCompleteness = await evaluateAttachmentCompleteness(
+    row.id,
+    row.source || "PORTAL"
+  );
   return {
     id: row.id,
     fullName: row.full_name,
@@ -201,6 +267,7 @@ export async function getCandidate(candidateId, actor) {
     dob: maskSensitive(decryptString(row.dob_enc), actor?.sensitiveDataView),
     ssnLast4: maskSensitive(decryptString(row.ssn_last4_enc), actor?.sensitiveDataView),
     duplicateFlag: Boolean(row.duplicate_flag),
+    attachmentCompleteness,
     createdAt: row.created_at
   };
 }

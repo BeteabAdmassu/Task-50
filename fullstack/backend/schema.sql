@@ -221,6 +221,14 @@ CREATE TABLE IF NOT EXISTS candidate_attachments (
   FOREIGN KEY (candidate_id) REFERENCES candidates(id)
 );
 
+CREATE TABLE IF NOT EXISTS application_attachment_requirements (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  classification VARCHAR(80) NOT NULL UNIQUE,
+  is_required TINYINT(1) NOT NULL DEFAULT 1,
+  applies_to_source VARCHAR(80) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS notification_templates (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   topic VARCHAR(80) NOT NULL UNIQUE,
@@ -233,6 +241,8 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions (
   user_id BIGINT NOT NULL,
   topic VARCHAR(80) NOT NULL,
   frequency VARCHAR(20) NOT NULL,
+  dnd_start CHAR(5) NOT NULL DEFAULT '21:00',
+  dnd_end CHAR(5) NOT NULL DEFAULT '07:00',
   enabled TINYINT(1) NOT NULL DEFAULT 1,
   UNIQUE KEY uq_user_topic (user_id, topic),
   FOREIGN KEY (user_id) REFERENCES users(id)

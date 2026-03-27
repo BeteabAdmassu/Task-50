@@ -38,6 +38,10 @@ npm install
 npm run start
 ```
 
+Before starting backend in non-development environments, set secrets explicitly:
+- `JWT_SECRET` (required outside development/test)
+- `ENCRYPTION_KEY_HEX` (64-char hex, required outside development/test)
+
 4. Seed demo users:
 
 ```bash
@@ -53,6 +57,20 @@ npm install
 npm run dev
 ```
 
+Windows PowerShell/CMD equivalent:
+
+```powershell
+cd ..\frontend
+copy .env.example .env
+npm install
+npm run dev
+```
+
 Frontend API base is configurable with `VITE_API_BASE_URL`.
 - If not set, frontend defaults to `${window.location.protocol}//${window.location.hostname}:4000/api`.
 - Example for LAN usage is provided in `frontend/.env.example`.
+
+Notification Do Not Disturb (DND) window can be set per subscription via
+`POST /api/notifications/subscriptions` payload fields:
+- `dndStart` (default `21:00`)
+- `dndEnd` (default `07:00`)

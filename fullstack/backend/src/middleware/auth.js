@@ -4,6 +4,7 @@ import { pool } from "../db.js";
 import { config } from "../config.js";
 import { AppError } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
+import { writeAudit } from "../services/audit-service.js";
 
 export async function optionalAuth(ctx, next) {
   const authHeader = ctx.headers.authorization;
@@ -30,6 +31,14 @@ export async function optionalAuth(ctx, next) {
     const idle = dayjs().diff(dayjs(session.last_activity_at), "second");
     if (idle > config.idleTimeoutSeconds) {
       await pool.execute("UPDATE sessions SET revoked_at = NOW() WHERE id = ?", [session.id]);
+      await writeAudit({
+        actorUserId: session.user_id,
+        action: "UPDATE",
+        entityType: "session",
+        entityId: session.id,
+        beforeValue: { revokedAt: null, lastActivityAt: session.last_activity_at },
+        afterValue: { revokedAt: "NOW", reason: "IDLE_TIMEOUT" }
+      });
       logger.info("auth", "Session revoked due to idle timeout", {
         userId: session.user_id,
         sessionId: session.id
@@ -37,6 +46,14 @@ export async function optionalAuth(ctx, next) {
       return next();
     }
     await pool.execute("UPDATE sessions SET last_activity_at = NOW() WHERE id = ?", [session.id]);
+    await writeAudit({
+      actorUserId: session.user_id,
+      action: "UPDATE",
+      entityType: "session",
+      entityId: session.id,
+      beforeValue: { lastActivityAt: session.last_activity_at },
+      afterValue: { lastActivityAt: "NOW" }
+    });
     ctx.state.user = {
       id: session.user_id,
       username: session.username,

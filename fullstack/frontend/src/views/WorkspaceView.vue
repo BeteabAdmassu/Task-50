@@ -51,7 +51,7 @@ const candidateAttachment = ref(null);
 const lastCandidateId = ref("");
 const candidateUploadStatus = ref("");
 const scoreForm = ref({ candidateId: "", ruleVersionId: "", courseworkScores: [0], midtermScores: [0], finalScores: [0], creditHours: 3 });
-const notifForm = ref({ topic: "RECEIPT_ACK", frequency: "IMMEDIATE" });
+const notifForm = ref({ topic: "RECEIPT_ACK", frequency: "IMMEDIATE", dndStart: "21:00", dndEnd: "07:00" });
 const searchForm = ref({ q: "", source: "", topic: "", entityType: "", startDate: "", endDate: "" });
 const searchResults = ref([]);
 

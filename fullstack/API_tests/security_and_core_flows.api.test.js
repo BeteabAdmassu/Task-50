@@ -34,6 +34,9 @@ test("POST /api/receiving/dock-appointments returns 409 on slot conflict", async
   const token = jwt.sign({ sub: 3, sessionId: "sess-dock" }, config.jwtSecret, { expiresIn: 3600 });
 
   pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-dock",
@@ -84,6 +87,9 @@ test("POST /api/receiving/receipts/:id/close blocks clerk from other site", asyn
   const token = jwt.sign({ sub: 4, sessionId: "sess-close" }, config.jwtSecret, { expiresIn: 3600 });
 
   pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-close",
@@ -125,6 +131,9 @@ test("POST /api/receiving/receipts/:id/close blocks clerk from other site", asyn
 
 test("POST /api/hr/applications creates candidate and returns upload token", async () => {
   pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
     if (sql.includes("FROM application_form_fields")) {
       return [[{ field_key: "work_eligibility" }]];
     }
@@ -145,6 +154,12 @@ test("POST /api/hr/applications creates candidate and returns upload token", asy
       }
       if (sql.includes("INSERT INTO candidate_form_answers")) {
         return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
       }
       if (sql.includes("INSERT INTO audit_logs")) {
         return [{ insertId: 1 }];
@@ -169,6 +184,7 @@ test("POST /api/hr/applications creates candidate and returns upload token", asy
   assert.equal(response.status, 200);
   assert.equal(body.id, 201);
   assert.equal(typeof body.uploadToken, "string");
+  assert.deepEqual(body.attachmentCompleteness.missingRequiredClasses, ["RESUME"]);
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;

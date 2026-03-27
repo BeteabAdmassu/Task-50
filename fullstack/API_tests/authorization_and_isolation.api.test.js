@@ -19,6 +19,7 @@ async function startServer() {
 test("planning API denies planner creating MPS for another site", async () => {
   const token = jwt.sign({ sub: 1, sessionId: "sess-plan-1" }, config.jwtSecret, { expiresIn: 3600 });
   pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-plan-1",
@@ -52,6 +53,7 @@ test("planning API denies planner creating MPS for another site", async () => {
 test("planning API allows planner creating MPS for same site", async () => {
   const token = jwt.sign({ sub: 1, sessionId: "sess-plan-2" }, config.jwtSecret, { expiresIn: 3600 });
   pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-plan-2",
@@ -96,6 +98,7 @@ test("interviewer can read assigned candidate but not unassigned", async () => {
 
   let assignmentAllowed = true;
   pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-int-1",
@@ -113,6 +116,12 @@ test("interviewer can read assigned candidate but not unassigned", async () => {
     if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
     if (sql.includes("FROM interviewer_candidate_assignments")) {
       return assignmentAllowed ? [[{ 1: 1 }]] : [[]];
+    }
+    if (sql.includes("FROM application_attachment_requirements")) {
+      return [[{ classification: "RESUME" }, { classification: "IDENTITY_DOC" }]];
+    }
+    if (sql.includes("FROM candidate_attachments")) {
+      return [[]];
     }
     if (sql.includes("FROM candidates WHERE id = ?")) {
       return [[{ id: 333, full_name: "A", email: "a@a", phone: "111", dob_enc: dobEnc, ssn_last4_enc: ssnEnc, duplicate_flag: 0, created_at: new Date() }]];
@@ -146,9 +155,11 @@ test("candidate attachment upload succeeds with candidate upload token", async (
   );
 
   pool.execute = async (sql) => {
-    if (sql.includes("SELECT id FROM candidates WHERE id = ?")) return [[{ id: 201 }]];
-    if (sql.includes("INSERT INTO candidate_attachments")) return [{ affectedRows: 1 }];
     if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("SELECT id, source FROM candidates WHERE id = ?")) return [[{ id: 201, source: "PORTAL" }]];
+    if (sql.includes("INSERT INTO candidate_attachments")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM application_attachment_requirements")) return [[{ classification: "RESUME" }]];
+    if (sql.includes("FROM candidate_attachments")) return [[{ classification: "RESUME", count: 1 }]];
     throw new Error(`Unexpected SQL: ${sql}`);
   };
 
@@ -176,6 +187,7 @@ test("search endpoint applies clerk site isolation", async () => {
   let scopeApplied = false;
 
   pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-search-1",
@@ -214,6 +226,7 @@ test("sensitive fields are unmasked when session has SENSITIVE_DATA_VIEW permiss
   const ssnEnc = encryptString("9988");
 
   pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
     if (sql.includes("FROM sessions s")) {
       return [[{
         id: "sess-hr-sensitive",
@@ -229,6 +242,12 @@ test("sensitive fields are unmasked when session has SENSITIVE_DATA_VIEW permiss
     }
     if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
     if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
+    if (sql.includes("FROM application_attachment_requirements")) {
+      return [[{ classification: "RESUME" }, { classification: "IDENTITY_DOC" }]];
+    }
+    if (sql.includes("FROM candidate_attachments")) {
+      return [[{ classification: "RESUME", count: 1 }, { classification: "IDENTITY_DOC", count: 1 }]];
+    }
     if (sql.includes("FROM candidates WHERE id = ?")) {
       return [[{ id: 9, full_name: "B", email: "b@b", phone: "222", dob_enc: dobEnc, ssn_last4_enc: ssnEnc, duplicate_flag: 0, created_at: new Date() }]];
     }
@@ -243,6 +262,47 @@ test("sensitive fields are unmasked when session has SENSITIVE_DATA_VIEW permiss
   assert.equal(response.status, 200);
   assert.equal(body.dob, "1992-09-11");
   assert.equal(body.ssnLast4, "9988");
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("notification subscription accepts custom DND window", async () => {
+  const token = jwt.sign({ sub: 2, sessionId: "sess-notify" }, config.jwtSecret, { expiresIn: 3600 });
+  let dndPersisted = false;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-notify",
+        user_id: 2,
+        last_activity_at: new Date(),
+        username: "hr1",
+        role: "HR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("SELECT id, frequency, enabled, dnd_start, dnd_end")) return [[]];
+    if (sql.includes("INSERT INTO notification_subscriptions")) {
+      dndPersisted = params[3] === "20:30" && params[4] === "06:15";
+      return [{ insertId: 22 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/subscriptions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ topic: "RECEIPT_ACK", frequency: "DAILY", dndStart: "20:30", dndEnd: "06:15" })
+  });
+  assert.equal(response.status, 200);
+  assert.equal(dndPersisted, true);
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;

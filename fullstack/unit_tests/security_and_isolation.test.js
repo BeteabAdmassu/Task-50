@@ -137,6 +137,9 @@ test("optionalAuth derives sensitiveDataView from explicit permission", async ()
     if (sql.includes("SET last_activity_at = NOW()")) {
       return [{ affectedRows: 1 }];
     }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
     throw new Error(`Unexpected SQL: ${sql}`);
   };
 
@@ -151,7 +154,7 @@ test("notification scheduling uses next valid daily and DND boundaries", async (
   const scheduled = [];
   pool.execute = async (sql, params) => {
     if (sql.includes("FROM notification_subscriptions")) {
-      return [[{ user_id: 9, frequency: "DAILY", body_template: "x" }]];
+      return [[{ user_id: 9, frequency: "DAILY", body_template: "x", dnd_start: "21:00", dnd_end: "07:00" }]];
     }
     if (sql.includes("INSERT INTO notifications")) {
       scheduled.push(params[3]);
@@ -174,7 +177,7 @@ test("notification scheduling uses next valid daily and DND boundaries", async (
   scheduled.length = 0;
   pool.execute = async (sql, params) => {
     if (sql.includes("FROM notification_subscriptions")) {
-      return [[{ user_id: 9, frequency: "IMMEDIATE", body_template: "x" }]];
+      return [[{ user_id: 9, frequency: "IMMEDIATE", body_template: "x", dnd_start: "21:00", dnd_end: "07:00" }]];
     }
     if (sql.includes("INSERT INTO notifications")) {
       scheduled.push(params[3]);
@@ -193,6 +196,68 @@ test("notification scheduling uses next valid daily and DND boundaries", async (
   assert.equal(secondScheduled.getMinutes(), 0);
   assert.equal(secondScheduled.getSeconds(), 0);
   assert.equal(secondScheduled.getHours(), 7);
+
+  pool.execute = originalExecute;
+});
+
+test("notification scheduling honors custom subscription DND window", async () => {
+  const scheduled = [];
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM notification_subscriptions")) {
+      return [[{ user_id: 9, frequency: "IMMEDIATE", body_template: "x", dnd_start: "20:00", dnd_end: "06:00" }]];
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      scheduled.push(params[3]);
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const now = new Date("2026-03-27T20:15:00");
+  await publishEvent("RECEIPT_ACK", {}, { id: 1 }, now);
+  const scheduledDate = new Date(scheduled[0]);
+  assert.equal(scheduledDate.getHours(), 6);
+  assert.equal(scheduledDate.getMinutes(), 0);
+  assert.ok(scheduledDate.getTime() > now.getTime());
+
+  pool.execute = originalExecute;
+});
+
+test("searchHub supports typo tolerance and source filter", async () => {
+  let capturedParams = [];
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM search_documents")) {
+      capturedParams = params;
+      return [[
+        {
+          entity_type: "candidate",
+          entity_id: "10",
+          title: "Applicant profile",
+          body: "Candidate onboarding",
+          tags: "applicant,hr",
+          source: "PORTAL",
+          topic: "ONBOARD",
+          created_at: new Date()
+        }
+      ]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const results = await searchHub({
+    actor: { id: 1, role: "ADMIN", siteId: 1 },
+    query: "aplicant",
+    source: "PORTAL",
+    topic: null,
+    entityType: null,
+    startDate: null,
+    endDate: null
+  });
+  assert.equal(results.length, 1);
+  assert.ok(capturedParams.includes("PORTAL"));
 
   pool.execute = originalExecute;
 });

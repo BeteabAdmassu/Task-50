@@ -4,22 +4,43 @@ import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { pool } from "../db.js";
 import { config } from "../config.js";
+import { AppError } from "../utils/errors.js";
 import { writeAudit } from "./audit-service.js";
 
-const dndStart = "21:00";
-const dndEnd = "07:00";
-
-function inDoNotDisturb(now = dayjs()) {
-  const hhmm = now.format("HH:mm");
-  return hhmm >= dndStart || hhmm < dndEnd;
+function isValidHhMm(value) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 }
 
-function nextDndRelease(now = dayjs()) {
-  const hhmm = now.format("HH:mm");
-  if (hhmm >= dndStart) {
-    return now.add(1, "day").hour(7).minute(0).second(0).millisecond(0).toDate();
+function resolveDndWindow(subscription) {
+  const start = subscription?.dnd_start || config.defaultDndStart;
+  const end = subscription?.dnd_end || config.defaultDndEnd;
+  if (!isValidHhMm(start) || !isValidHhMm(end)) {
+    return {
+      start: config.defaultDndStart,
+      end: config.defaultDndEnd
+    };
   }
-  return now.hour(7).minute(0).second(0).millisecond(0).toDate();
+  return { start, end };
+}
+
+function inDoNotDisturb(window, now = dayjs()) {
+  const hhmm = now.format("HH:mm");
+  return hhmm >= window.start || hhmm < window.end;
+}
+
+function nextDndRelease(window, now = dayjs()) {
+  const hhmm = now.format("HH:mm");
+  const [endHour, endMinute] = window.end.split(":").map(Number);
+  if (hhmm >= window.start) {
+    return now
+      .add(1, "day")
+      .hour(endHour)
+      .minute(endMinute)
+      .second(0)
+      .millisecond(0)
+      .toDate();
+  }
+  return now.hour(endHour).minute(endMinute).second(0).millisecond(0).toDate();
 }
 
 function nextDaily6pm(now = dayjs()) {
@@ -31,29 +52,39 @@ function nextDaily6pm(now = dayjs()) {
 }
 
 export async function subscribeNotification(input, actor) {
+  const dndStart = input.dndStart || config.defaultDndStart;
+  const dndEnd = input.dndEnd || config.defaultDndEnd;
+  if (!isValidHhMm(dndStart) || !isValidHhMm(dndEnd)) {
+    throw new AppError(400, "DND window must be in HH:mm format");
+  }
   const [existing] = await pool.execute(
-    `SELECT id, frequency, enabled FROM notification_subscriptions
+    `SELECT id, frequency, enabled, dnd_start, dnd_end FROM notification_subscriptions
      WHERE user_id = ? AND topic = ?`,
     [actor.id, input.topic]
   );
   
   const beforeValue = existing.length ? {
     frequency: existing[0].frequency,
-    enabled: Boolean(existing[0].enabled)
+    enabled: Boolean(existing[0].enabled),
+    dndStart: existing[0].dnd_start,
+    dndEnd: existing[0].dnd_end
   } : null;
   
   const [result] = await pool.execute(
     `INSERT INTO notification_subscriptions
-      (user_id, topic, frequency, enabled)
-     VALUES (?, ?, ?, 1)
-     ON DUPLICATE KEY UPDATE frequency = VALUES(frequency), enabled = 1`,
-    [actor.id, input.topic, input.frequency]
+      (user_id, topic, frequency, enabled, dnd_start, dnd_end)
+     VALUES (?, ?, ?, 1, ?, ?)
+     ON DUPLICATE KEY UPDATE frequency = VALUES(frequency), enabled = 1,
+       dnd_start = VALUES(dnd_start), dnd_end = VALUES(dnd_end)`,
+    [actor.id, input.topic, input.frequency, dndStart, dndEnd]
   );
   
   const subscriptionId = result.insertId || existing[0].id;
   const afterValue = {
     frequency: input.frequency,
-    enabled: true
+    enabled: true,
+    dndStart,
+    dndEnd
   };
   
   await writeAudit({
@@ -70,7 +101,7 @@ export async function subscribeNotification(input, actor) {
 
 export async function publishEvent(eventType, payload, actor = null, nowOverride = null) {
   const [subs] = await pool.execute(
-    `SELECT ns.user_id, ns.frequency, nt.body_template
+    `SELECT ns.user_id, ns.frequency, ns.dnd_start, ns.dnd_end, nt.body_template
      FROM notification_subscriptions ns
      JOIN notification_templates nt ON nt.topic = ns.topic
      WHERE ns.topic = ? AND ns.enabled = 1`,
@@ -79,12 +110,18 @@ export async function publishEvent(eventType, payload, actor = null, nowOverride
   const now = nowOverride ? dayjs(nowOverride) : dayjs();
   let createdCount = 0;
   for (const sub of subs) {
-    if (inDoNotDisturb(now)) {
+    const dndWindow = resolveDndWindow(sub);
+    if (inDoNotDisturb(dndWindow, now)) {
       const [result] = await pool.execute(
         `INSERT INTO notifications
           (user_id, event_type, message, status, deliver_after)
          VALUES (?, ?, ?, 'PENDING', ?)`,
-        [sub.user_id, eventType, renderTemplate(sub.body_template, payload), nextDndRelease(now)]
+        [
+          sub.user_id,
+          eventType,
+          renderTemplate(sub.body_template, payload),
+          nextDndRelease(dndWindow, now)
+        ]
       );
       createdCount += 1;
       await writeAudit({

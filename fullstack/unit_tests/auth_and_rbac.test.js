@@ -31,6 +31,9 @@ test("login locks account after fifth failed attempt", async () => {
       updateParams = params;
       return [{ affectedRows: 1 }];
     }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
     throw new Error(`Unexpected SQL: ${sql}`);
   };
 
@@ -108,6 +111,9 @@ test("optionalAuth revokes idle session after timeout", async () => {
     if (sql.includes("SET revoked_at = NOW()")) {
       revoked = true;
       return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   };

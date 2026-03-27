@@ -52,3 +52,8 @@ INSERT INTO application_form_fields (field_key, label, field_type, is_required, 
   ('years_experience', 'Years of Experience', 'number', 1, 2),
   ('preferred_shift', 'Preferred Shift', 'select', 0, 3)
 ON DUPLICATE KEY UPDATE label = VALUES(label), field_type = VALUES(field_type), is_required = VALUES(is_required), sort_order = VALUES(sort_order);
+
+INSERT INTO application_attachment_requirements (classification, is_required, applies_to_source) VALUES
+  ('RESUME', 1, NULL),
+  ('IDENTITY_DOC', 1, NULL)
+ON DUPLICATE KEY UPDATE is_required = VALUES(is_required), applies_to_source = VALUES(applies_to_source);

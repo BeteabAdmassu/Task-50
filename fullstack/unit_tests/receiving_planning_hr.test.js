@@ -180,6 +180,12 @@ test("createCandidateApplication returns upload token", async () => {
       if (sql.includes("INSERT INTO candidate_form_answers")) {
         return [{ affectedRows: 1 }];
       }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }, { classification: "IDENTITY_DOC" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
+      }
       if (sql.includes("INSERT INTO audit_logs")) {
         return [{ insertId: 1 }];
       }
@@ -201,6 +207,7 @@ test("createCandidateApplication returns upload token", async () => {
   assert.equal(result.id, 88);
   assert.equal(typeof result.uploadToken, "string");
   assert.ok(result.uploadToken.length > 10);
+  assert.deepEqual(result.attachmentCompleteness.missingRequiredClasses, ["RESUME", "IDENTITY_DOC"]);
 
   pool.execute = originalExecute;
   pool.getConnection = originalGetConnection;

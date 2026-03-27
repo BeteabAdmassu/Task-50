@@ -25,6 +25,8 @@ defineProps({
       <option value="HOURLY">Hourly digest</option>
       <option value="DAILY">Daily 6 PM</option>
     </select>
+    <input v-model="notifForm.dndStart" type="time" placeholder="DND start" />
+    <input v-model="notifForm.dndEnd" type="time" placeholder="DND end" />
     <button @click="onSubscribeNotifications">Save subscription</button>
   </article>
 </template>

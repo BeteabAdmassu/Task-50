@@ -15,10 +15,10 @@
 | POST | `/api/planning/work-orders/:id/events` | Log production/rework/downtime | type,qty,reason | `{ok}` |
 | POST | `/api/planning/plans/:id/adjustments` | Submit plan change with reason | before,after,reason | `adjustmentId` |
 | POST | `/api/planning/adjustments/:id/approve` | Supervisor approval | id | `{ok}` |
-| POST | `/api/hr/applications` | Candidate submits application | demographics,formData | `candidateId,duplicateFlag` |
-| POST | `/api/hr/applications/:id/attachments` | Upload attachment <=20MB | multipart file | `attachmentId` |
+| POST | `/api/hr/applications` | Candidate submits application | demographics,formData | `candidateId,duplicateFlag,uploadToken,attachmentCompleteness` |
+| POST | `/api/hr/applications/:id/attachments` | Upload attachment <=20MB | multipart file + optional `x-candidate-upload-token` | `attachmentId,attachmentCompleteness` |
 | GET | `/api/hr/candidates/:id` | Candidate profile with masking rules | id | candidate profile |
-| POST | `/api/notifications/subscriptions` | Subscribe to milestone topics | topic,frequency | `{ok}` |
+| POST | `/api/notifications/subscriptions` | Subscribe to milestone topics | topic,frequency,dndStart,dndEnd | `{ok}` |
 | POST | `/api/notifications/events` | Publish event to center | event,payload | `{ok}` |
 | POST | `/api/notifications/offline-queue` | Export connector message file | channel,body | `queueId,filePath` |
 | GET | `/api/search` | Full-text-like search + filters | q,start,end,source,topic,entity | results[] |

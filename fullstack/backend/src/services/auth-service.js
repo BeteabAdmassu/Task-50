@@ -24,6 +24,10 @@ export async function login(username, password) {
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
+    const beforeValue = {
+      failedLoginAttempts: Number(user.failed_login_attempts || 0),
+      lockedUntil: user.locked_until || null
+    };
     const attempts = user.failed_login_attempts + 1;
     const lockedUntil =
       attempts >= config.maxFailedLogins
@@ -35,6 +39,17 @@ export async function login(username, password) {
        WHERE id = ?`,
       [attempts, lockedUntil, user.id]
     );
+    await writeAudit({
+      actorUserId: user.id,
+      action: "UPDATE",
+      entityType: "user",
+      entityId: user.id,
+      beforeValue,
+      afterValue: {
+        failedLoginAttempts: attempts,
+        lockedUntil
+      }
+    });
     logger.warn("auth", "Invalid login attempt", {
       username,
       attempts,
@@ -47,6 +62,20 @@ export async function login(username, password) {
     "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
     [user.id]
   );
+  await writeAudit({
+    actorUserId: user.id,
+    action: "UPDATE",
+    entityType: "user",
+    entityId: user.id,
+    beforeValue: {
+      failedLoginAttempts: Number(user.failed_login_attempts || 0),
+      lockedUntil: user.locked_until || null
+    },
+    afterValue: {
+      failedLoginAttempts: 0,
+      lockedUntil: null
+    }
+  });
 
   const sessionId = uuidv4();
   await pool.execute(
