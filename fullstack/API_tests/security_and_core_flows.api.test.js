@@ -317,3 +317,181 @@ test("POST /api/receiving/receipts/:id/close succeeds for same-site clerk", asyn
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;
 });
+
+test("GET /api/dashboard scopes planner widgets to own site", async () => {
+  const token = jwt.sign({ sub: 30, sessionId: "sess-dashboard-planner" }, config.jwtSecret, { expiresIn: 3600 });
+  let siteScoped = false;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-dashboard-planner",
+        user_id: 30,
+        last_activity_at: new Date(),
+        username: "planner1",
+        role: "PLANNER",
+        site_id: 9,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("JOIN production_plans pp")) {
+      siteScoped = params?.[0] === 9;
+      return [[{ count: 4 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/dashboard`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.role, "PLANNER");
+  assert.equal(body.widgets.activeWorkOrders, 4);
+  assert.equal(siteScoped, true);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("GET /api/dashboard returns generic error body for internal failures", async () => {
+  const token = jwt.sign({ sub: 31, sessionId: "sess-dashboard-error" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-dashboard-error",
+        user_id: 31,
+        last_activity_at: new Date(),
+        username: "admin",
+        role: "ADMIN",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("SELECT COUNT(*) AS count FROM work_orders")) {
+      throw new Error("SQL INTERNAL DETAILS SHOULD NOT LEAK");
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/dashboard`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(body.error, "Internal server error");
+  assert.equal(body.details, null);
+  assert.equal(String(body.error).includes("SQL INTERNAL DETAILS"), false);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/notifications/offline-queue creates queued connector export", async () => {
+  const token = jwt.sign({ sub: 32, sessionId: "sess-offline-create" }, config.jwtSecret, { expiresIn: 3600 });
+  let queueInsertSeen = false;
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-offline-create",
+        user_id: 32,
+        last_activity_at: new Date(),
+        username: "admin",
+        role: "ADMIN",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("INSERT INTO message_queue")) {
+      queueInsertSeen = true;
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/offline-queue`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      channel: "EMAIL",
+      recipient: "ops@example.local",
+      subject: "Queue test",
+      body: "offline payload"
+    })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(queueInsertSeen, true);
+  assert.ok(body.id);
+  assert.ok(String(body.filePath).includes("message_exports"));
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/notifications/offline-queue/retry processes retries and statuses", async () => {
+  const token = jwt.sign({ sub: 33, sessionId: "sess-offline-retry" }, config.jwtSecret, { expiresIn: 3600 });
+  const retriedIds = [];
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-offline-retry",
+        user_id: 33,
+        last_activity_at: new Date(),
+        username: "admin",
+        role: "ADMIN",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM message_queue WHERE status IN ('FAILED', 'QUEUED')")) {
+      return [[
+        { id: "msg-1", retry_count: 0 },
+        { id: "msg-2", retry_count: 2 }
+      ]];
+    }
+    if (sql.includes("UPDATE message_queue")) {
+      retriedIds.push(params[0]);
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/offline-queue/retry`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.processed, 2);
+  assert.deepEqual(retriedIds, ["msg-1", "msg-2"]);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});

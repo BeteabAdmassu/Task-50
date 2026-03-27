@@ -150,6 +150,39 @@ test("optionalAuth derives sensitiveDataView from explicit permission", async ()
   pool.execute = originalExecute;
 });
 
+test("optionalAuth does not grant sensitiveDataView from user flag alone", async () => {
+  const token = jwt.sign({ sub: 3, sessionId: "s-flag-only" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "s-flag-only",
+        user_id: 3,
+        last_activity_at: new Date(),
+        username: "hr-flag",
+        role: "HR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const ctx = { headers: { authorization: `Bearer ${token}` }, state: {} };
+  await optionalAuth(ctx, async () => {});
+  assert.equal(ctx.state.user.sensitiveDataView, false);
+
+  pool.execute = originalExecute;
+});
+
 test("notification scheduling uses next valid daily and DND boundaries", async () => {
   const scheduled = [];
   pool.execute = async (sql, params) => {

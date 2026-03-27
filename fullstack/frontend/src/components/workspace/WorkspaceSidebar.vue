@@ -24,7 +24,7 @@ const emit = defineEmits(["update:active-panel", "logout"]);
 <template>
   <aside class="workspace-nav">
     <h2>ForgeOps Hub</h2>
-    <p>{{ user?.username }} · {{ role }}</p>
+    <p>{{ user?.username }} | {{ role }}</p>
     <button
       v-for="panel in panels"
       :key="panel"

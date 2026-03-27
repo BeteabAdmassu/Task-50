@@ -60,7 +60,7 @@ export async function optionalAuth(ctx, next) {
       role: session.role,
       siteId: session.site_id,
       departmentId: session.department_id,
-      sensitiveDataView: Boolean(session.sensitive_data_view || session.has_sensitive_permission),
+      sensitiveDataView: Boolean(session.has_sensitive_permission),
       sessionId: session.id
     };
   } catch {

@@ -267,6 +267,53 @@ test("sensitive fields are unmasked when session has SENSITIVE_DATA_VIEW permiss
   pool.execute = originalExecute;
 });
 
+test("sensitive fields stay masked when user flag is true but permission is missing", async () => {
+  const token = jwt.sign({ sub: 12, sessionId: "sess-flag-only" }, config.jwtSecret, { expiresIn: 3600 });
+  const dobEnc = encryptString("1991-02-03");
+  const ssnEnc = encryptString("1122");
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-flag-only",
+        user_id: 12,
+        last_activity_at: new Date(),
+        username: "hr-flag-only",
+        role: "HR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
+    if (sql.includes("FROM application_attachment_requirements")) {
+      return [[{ classification: "RESUME" }]];
+    }
+    if (sql.includes("FROM candidate_attachments")) {
+      return [[{ classification: "RESUME", count: 1 }]];
+    }
+    if (sql.includes("FROM candidates WHERE id = ?")) {
+      return [[{ id: 120, full_name: "C", email: "c@c", phone: "333", dob_enc: dobEnc, ssn_last4_enc: ssnEnc, source: "PORTAL", duplicate_flag: 0, created_at: new Date() }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/hr/candidates/120`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.match(body.dob, /\*/);
+  assert.match(body.ssnLast4, /\*/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
 test("notification subscription accepts custom DND window", async () => {
   const token = jwt.sign({ sub: 2, sessionId: "sess-notify" }, config.jwtSecret, { expiresIn: 3600 });
   let dndPersisted = false;

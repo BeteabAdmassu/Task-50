@@ -7,10 +7,17 @@ export async function errorHandler(ctx, next) {
   } catch (err) {
     const status = err instanceof AppError ? err.status : 500;
     ctx.status = status;
-    ctx.body = {
-      error: err.message || "Unexpected error",
-      details: err instanceof AppError ? err.details : null
-    };
+    if (status >= 500) {
+      ctx.body = {
+        error: "Internal server error",
+        details: null
+      };
+    } else {
+      ctx.body = {
+        error: err.message || "Unexpected error",
+        details: err instanceof AppError ? err.details : null
+      };
+    }
     if (status === 400) {
       logger.warn("validation", "Request validation failed", {
         path: ctx.path,

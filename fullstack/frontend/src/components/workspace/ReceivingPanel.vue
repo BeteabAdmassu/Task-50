@@ -7,6 +7,18 @@ defineProps({
   onSubmitReceipt: {
     type: Function,
     required: true
+  },
+  receiptCloseForm: {
+    type: Object,
+    required: true
+  },
+  receiptCloseStatus: {
+    type: String,
+    default: ""
+  },
+  onCloseReceipt: {
+    type: Function,
+    required: true
   }
 });
 </script>
@@ -31,5 +43,10 @@ defineProps({
       <input v-model="line.dispositionNote" placeholder="Disposition note" />
     </div>
     <button @click="onSubmitReceipt">Create receipt</button>
+
+    <h3>Close receipt</h3>
+    <input v-model="receiptCloseForm.receiptId" placeholder="Receipt ID" />
+    <button @click="onCloseReceipt">Close receipt</button>
+    <p v-if="receiptCloseStatus">{{ receiptCloseStatus }}</p>
   </article>
 </template>

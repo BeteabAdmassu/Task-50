@@ -12,6 +12,7 @@ import MrpPanel from "../components/workspace/MrpPanel.vue";
 import WorkOrdersPanel from "../components/workspace/WorkOrdersPanel.vue";
 import AdjustmentsPanel from "../components/workspace/AdjustmentsPanel.vue";
 import CandidateApplicationPanel from "../components/workspace/CandidateApplicationPanel.vue";
+import InterviewerReviewPanel from "../components/workspace/InterviewerReviewPanel.vue";
 import RulesPanel from "../components/workspace/RulesPanel.vue";
 import NotificationsPanel from "../components/workspace/NotificationsPanel.vue";
 import SearchPanel from "../components/workspace/SearchPanel.vue";
@@ -28,7 +29,7 @@ const panelsByRole = {
   PLANNER: ["overview", "mps", "mrp", "workorders", "adjustments", "search"],
   PLANNER_SUPERVISOR: ["overview", "mps", "mrp", "workorders", "adjustments", "search"],
   HR: ["overview", "candidates", "rules", "notifications", "search"],
-  INTERVIEWER: ["overview", "candidates", "notifications", "search"],
+  INTERVIEWER: ["overview", "candidateReview", "notifications", "search"],
   CANDIDATE: ["overview", "candidatePortal"]
 };
 
@@ -36,6 +37,8 @@ const availablePanels = computed(() => panelsByRole[auth.role] || ["overview"]);
 
 const dockForm = ref({ siteId: auth.user?.siteId || "", poNumber: "", startAt: "", endAt: "", notes: "" });
 const receiptForm = ref({ siteId: auth.user?.siteId || "", poNumber: "", lines: [{ poLineNo: "1", sku: "", lotNo: "", qtyExpected: 0, qtyReceived: 0, discrepancyType: "", dispositionNote: "" }] });
+const receiptCloseForm = ref({ receiptId: "" });
+const receiptCloseStatus = ref("");
 const putawayInput = ref({ sku: "", lotNo: "", quantity: 0 });
 const putawayResult = ref(null);
 const mpsForm = ref({ siteId: auth.user?.siteId || 1, planName: "12 Week Plan", startWeek: "", weeks: Array.from({ length: 12 }, (_, i) => ({ weekIndex: i + 1, itemCode: "", plannedQty: 0 })) });
@@ -45,6 +48,8 @@ const workOrderForm = ref({ planId: "", itemCode: "", qtyTarget: 0, scheduledSta
 const workOrderEventForm = ref({ workOrderId: "", eventType: "PRODUCTION", qty: 0, reasonCode: "", notes: "" });
 const workOrderEventStatus = ref("");
 const adjustmentForm = ref({ planId: "", reasonCode: "", before: "{}", after: "{}" });
+const adjustmentApproveForm = ref({ adjustmentId: "" });
+const adjustmentApproveStatus = ref("");
 const candidateForm = ref({ fullName: "", email: "", phone: "", dob: "", ssnLast4: "", source: "PORTAL", formData: [] });
 const appFormFields = ref([]);
 const candidateAttachment = ref(null);
@@ -54,6 +59,9 @@ const scoreForm = ref({ candidateId: "", ruleVersionId: "", courseworkScores: [0
 const notifForm = ref({ topic: "RECEIPT_ACK", frequency: "IMMEDIATE", dndStart: "21:00", dndEnd: "07:00" });
 const searchForm = ref({ q: "", source: "", topic: "", entityType: "", startDate: "", endDate: "" });
 const searchResults = ref([]);
+const interviewerReviewForm = ref({ candidateId: "" });
+const interviewerReviewResult = ref(null);
+const interviewerReviewStatus = ref("");
 
 onMounted(loadDashboard);
 
@@ -82,6 +90,22 @@ async function submitReceipt() {
     }))
   };
   await apiRequest("/receiving/receipts", { method: "POST", body: JSON.stringify(payload) });
+}
+
+async function closeReceipt() {
+  receiptCloseStatus.value = "";
+  if (!receiptCloseForm.value.receiptId) {
+    receiptCloseStatus.value = "Receipt ID is required.";
+    return;
+  }
+  try {
+    await apiRequest(`/receiving/receipts/${receiptCloseForm.value.receiptId}/close`, {
+      method: "POST"
+    });
+    receiptCloseStatus.value = "Receipt closed successfully.";
+  } catch (err) {
+    receiptCloseStatus.value = `Failed to close receipt: ${err.message}`;
+  }
 }
 
 async function runPutaway() {
@@ -129,6 +153,24 @@ async function requestAdjustment() {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+const canApproveAdjustments = computed(() => ["ADMIN", "PLANNER_SUPERVISOR"].includes(auth.role));
+
+async function approveAdjustment() {
+  adjustmentApproveStatus.value = "";
+  if (!adjustmentApproveForm.value.adjustmentId) {
+    adjustmentApproveStatus.value = "Adjustment ID is required.";
+    return;
+  }
+  try {
+    await apiRequest(`/planning/adjustments/${adjustmentApproveForm.value.adjustmentId}/approve`, {
+      method: "POST"
+    });
+    adjustmentApproveStatus.value = "Adjustment approved.";
+  } catch (err) {
+    adjustmentApproveStatus.value = `Approval failed: ${err.message}`;
+  }
 }
 
 async function submitCandidate() {
@@ -182,6 +224,23 @@ async function searchAll() {
   searchResults.value = await apiRequest(`/search?${params}`);
 }
 
+async function loadInterviewerCandidate() {
+  interviewerReviewStatus.value = "";
+  interviewerReviewResult.value = null;
+  if (!interviewerReviewForm.value.candidateId) {
+    interviewerReviewStatus.value = "Candidate ID is required.";
+    return;
+  }
+  try {
+    interviewerReviewResult.value = await apiRequest(
+      `/hr/candidates/${interviewerReviewForm.value.candidateId}`
+    );
+    interviewerReviewStatus.value = "Candidate loaded.";
+  } catch (err) {
+    interviewerReviewStatus.value = `Unable to load candidate: ${err.message}`;
+  }
+}
+
 async function logout() {
   await auth.logout();
   window.location.href = "/login";
@@ -213,6 +272,9 @@ async function logout() {
         v-if="activePanel === 'receiving'"
         :receipt-form="receiptForm"
         :on-submit-receipt="submitReceipt"
+        :receipt-close-form="receiptCloseForm"
+        :receipt-close-status="receiptCloseStatus"
+        :on-close-receipt="closeReceipt"
       />
 
       <PutawayPanel
@@ -245,6 +307,10 @@ async function logout() {
         v-if="activePanel === 'adjustments'"
         :adjustment-form="adjustmentForm"
         :on-request-adjustment="requestAdjustment"
+        :can-approve="canApproveAdjustments"
+        :adjustment-approve-form="adjustmentApproveForm"
+        :adjustment-approve-status="adjustmentApproveStatus"
+        :on-approve-adjustment="approveAdjustment"
       />
 
       <CandidateApplicationPanel
@@ -256,6 +322,14 @@ async function logout() {
         :on-candidate-file-change="onCandidateFileChange"
         :on-submit-candidate="submitCandidate"
         :get-form-entry="getFormEntry"
+      />
+
+      <InterviewerReviewPanel
+        v-if="activePanel === 'candidateReview'"
+        :review-form="interviewerReviewForm"
+        :review-result="interviewerReviewResult"
+        :review-status="interviewerReviewStatus"
+        :on-load-candidate="loadInterviewerCandidate"
       />
 
       <RulesPanel v-if="activePanel === 'rules'" :score-form="scoreForm" :on-compute-score="computeScore" />

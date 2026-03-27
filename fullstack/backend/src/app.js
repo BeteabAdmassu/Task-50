@@ -42,11 +42,24 @@ router.get("/api/dashboard", requireAuth, async (ctx) => {
     ctx.body = { role, widgets: { openReceipts: openReceipts.count } };
     return;
   }
-  if (role === "PLANNER") {
+  if (["PLANNER", "PLANNER_SUPERVISOR"].includes(role)) {
+    const [[openOrders]] = await pool.execute(
+      `SELECT COUNT(*) AS count
+       FROM work_orders wo
+       JOIN production_plans pp ON pp.id = wo.plan_id
+       WHERE wo.status IN ('OPEN', 'IN_PROGRESS')
+         AND pp.site_id = ?`,
+      [ctx.state.user.siteId]
+    );
+    ctx.body = { role, widgets: { activeWorkOrders: openOrders.count, siteId: ctx.state.user.siteId } };
+    return;
+  }
+  if (role === "ADMIN") {
     const [[openOrders]] = await pool.execute(
       "SELECT COUNT(*) AS count FROM work_orders WHERE status IN ('OPEN', 'IN_PROGRESS')"
     );
-    ctx.body = { role, widgets: { activeWorkOrders: openOrders.count } };
+    const [[candidateCount]] = await pool.execute("SELECT COUNT(*) AS count FROM candidates");
+    ctx.body = { role, widgets: { activeWorkOrders: openOrders.count, candidates: candidateCount.count } };
     return;
   }
   const [[candidateCount]] = await pool.execute("SELECT COUNT(*) AS count FROM candidates");

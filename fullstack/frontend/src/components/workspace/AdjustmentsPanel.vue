@@ -7,6 +7,22 @@ defineProps({
   onRequestAdjustment: {
     type: Function,
     required: true
+  },
+  canApprove: {
+    type: Boolean,
+    default: false
+  },
+  adjustmentApproveForm: {
+    type: Object,
+    required: true
+  },
+  adjustmentApproveStatus: {
+    type: String,
+    default: ""
+  },
+  onApproveAdjustment: {
+    type: Function,
+    required: true
   }
 });
 </script>
@@ -19,5 +35,12 @@ defineProps({
     <textarea v-model="adjustmentForm.before" placeholder="Before JSON" />
     <textarea v-model="adjustmentForm.after" placeholder="After JSON" />
     <button @click="onRequestAdjustment">Submit for approval</button>
+
+    <template v-if="canApprove">
+      <h3>Approve plan adjustment</h3>
+      <input v-model="adjustmentApproveForm.adjustmentId" placeholder="Adjustment ID" />
+      <button @click="onApproveAdjustment">Approve adjustment</button>
+      <p v-if="adjustmentApproveStatus">{{ adjustmentApproveStatus }}</p>
+    </template>
   </article>
 </template>

@@ -74,3 +74,34 @@ Notification Do Not Disturb (DND) window can be set per subscription via
 `POST /api/notifications/subscriptions` payload fields:
 - `dndStart` (default `21:00`)
 - `dndEnd` (default `07:00`)
+
+Sensitive candidate fields (DOB/SSN last4) are unmasked only when the actor role
+has the explicit `SENSITIVE_DATA_VIEW` permission.
+
+## Offline Connector Queue
+
+- Offline mode uses in-app notifications as active delivery channel.
+- External connector channels (email/SMS/IM) are queued as export files and tracked in `message_queue`.
+- API flows:
+  - `POST /api/notifications/offline-queue` creates queued connector export files.
+  - `POST /api/notifications/offline-queue/retry` increments retries and tracks status transitions.
+
+## Test Commands
+
+Linux/macOS/Git Bash:
+
+```bash
+cd fullstack
+node --test --test-concurrency=1 unit_tests/*.test.js
+node --test --test-concurrency=1 API_tests/*.test.js
+```
+
+Windows PowerShell/CMD:
+
+```powershell
+cd fullstack
+node --test --test-concurrency=1 unit_tests/*.test.js
+node --test --test-concurrency=1 API_tests/*.test.js
+cd frontend
+npm.cmd run build
+```
