@@ -1,5 +1,5 @@
 import Router from "koa-router";
-import { requireAuth, requirePermission } from "../middleware/auth.js";
+import { enforceAttributeRule, requireAuth, requirePermission } from "../middleware/auth.js";
 import {
   approvePlanAdjustment,
   createWorkOrder,
@@ -11,12 +11,18 @@ import {
 
 const router = new Router({ prefix: "/api/planning" });
 
-router.post("/mps", requireAuth, requirePermission("MPS_WRITE"), async (ctx) => {
-  ctx.body = await upsertMpsPlan(ctx.request.body, ctx.state.user);
-});
+router.post(
+  "/mps",
+  requireAuth,
+  requirePermission("MPS_WRITE"),
+  enforceAttributeRule((user, ctx) => user.role === "ADMIN" || Number(user.siteId) === Number(ctx.request.body.siteId)),
+  async (ctx) => {
+    ctx.body = await upsertMpsPlan(ctx.request.body, ctx.state.user);
+  }
+);
 
 router.get("/mps/:planId/mrp", requireAuth, requirePermission("MRP_RUN"), async (ctx) => {
-  ctx.body = await runMrp(ctx.params.planId);
+  ctx.body = await runMrp(ctx.params.planId, ctx.state.user);
 });
 
 router.post("/work-orders", requireAuth, requirePermission("WORK_ORDER_WRITE"), async (ctx) => {

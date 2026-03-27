@@ -14,6 +14,22 @@ function inDoNotDisturb(now = dayjs()) {
   return hhmm >= dndStart || hhmm < dndEnd;
 }
 
+function nextDndRelease(now = dayjs()) {
+  const hhmm = now.format("HH:mm");
+  if (hhmm >= dndStart) {
+    return now.add(1, "day").hour(7).minute(0).second(0).millisecond(0).toDate();
+  }
+  return now.hour(7).minute(0).second(0).millisecond(0).toDate();
+}
+
+function nextDaily6pm(now = dayjs()) {
+  const todaySixPm = now.hour(18).minute(0).second(0).millisecond(0);
+  if (now.isBefore(todaySixPm)) {
+    return todaySixPm.toDate();
+  }
+  return todaySixPm.add(1, "day").toDate();
+}
+
 export async function subscribeNotification(input, actor) {
   const [existing] = await pool.execute(
     `SELECT id, frequency, enabled FROM notification_subscriptions
@@ -52,7 +68,7 @@ export async function subscribeNotification(input, actor) {
   return { id: subscriptionId, ok: true };
 }
 
-export async function publishEvent(eventType, payload, actor = null) {
+export async function publishEvent(eventType, payload, actor = null, nowOverride = null) {
   const [subs] = await pool.execute(
     `SELECT ns.user_id, ns.frequency, nt.body_template
      FROM notification_subscriptions ns
@@ -60,7 +76,7 @@ export async function publishEvent(eventType, payload, actor = null) {
      WHERE ns.topic = ? AND ns.enabled = 1`,
     [eventType]
   );
-  const now = dayjs();
+  const now = nowOverride ? dayjs(nowOverride) : dayjs();
   let createdCount = 0;
   for (const sub of subs) {
     if (inDoNotDisturb(now)) {
@@ -68,7 +84,7 @@ export async function publishEvent(eventType, payload, actor = null) {
         `INSERT INTO notifications
           (user_id, event_type, message, status, deliver_after)
          VALUES (?, ?, ?, 'PENDING', ?)`,
-        [sub.user_id, eventType, renderTemplate(sub.body_template, payload), now.hour(7).add(1, "day").toDate()]
+        [sub.user_id, eventType, renderTemplate(sub.body_template, payload), nextDndRelease(now)]
       );
       createdCount += 1;
       await writeAudit({
@@ -112,7 +128,7 @@ export async function publishEvent(eventType, payload, actor = null) {
       const deliverAfter =
         sub.frequency === "HOURLY"
           ? now.startOf("hour").add(1, "hour").toDate()
-          : now.hour(18).minute(0).second(0).millisecond(0).toDate();
+          : nextDaily6pm(now);
       const [result] = await pool.execute(
         `INSERT INTO notifications
           (user_id, event_type, message, status, deliver_after)

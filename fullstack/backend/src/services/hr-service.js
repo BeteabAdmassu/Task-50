@@ -138,18 +138,22 @@ function classifyAttachment(fileName) {
 }
 
 export async function attachCandidateFile(candidateId, file, actor) {
+  const mimeType = file?.type || file?.mimetype || file?.mime || null;
+  const sourcePath = file?.path || file?.filepath || null;
+  const originalName = file?.name || file?.originalFilename || "upload.bin";
   assert(file, 400, "File required");
-  assert(allowedMimeTypes.has(file.type), 400, "Only PDF/JPG/PNG allowed");
+  assert(allowedMimeTypes.has(mimeType), 400, "Only PDF/JPG/PNG allowed");
   assert(file.size <= maxBytes, 400, "File exceeds 20 MB");
+  assert(sourcePath, 400, "Upload source path missing");
 
   const [candidates] = await pool.execute("SELECT id FROM candidates WHERE id = ?", [candidateId]);
   assert(candidates.length, 404, "Candidate not found");
 
   await fs.mkdir(config.uploadDir, { recursive: true });
-  const ext = path.extname(file.name || "").toLowerCase();
+  const ext = path.extname(originalName || "").toLowerCase();
   const attachmentId = uuidv4();
   const destPath = path.join(config.uploadDir, `${attachmentId}${ext}`);
-  await fs.copyFile(file.path, destPath);
+  await fs.copyFile(sourcePath, destPath);
 
   await pool.execute(
     `INSERT INTO candidate_attachments
@@ -158,11 +162,11 @@ export async function attachCandidateFile(candidateId, file, actor) {
     [
       attachmentId,
       candidateId,
-      file.name,
+      originalName,
       destPath,
-      file.type,
+      mimeType,
       file.size,
-      classifyAttachment(file.name)
+      classifyAttachment(originalName)
     ]
   );
 
@@ -174,7 +178,7 @@ export async function attachCandidateFile(candidateId, file, actor) {
     beforeValue: null,
     afterValue: {
       candidateId,
-      originalName: file.name
+      originalName
     }
   });
 

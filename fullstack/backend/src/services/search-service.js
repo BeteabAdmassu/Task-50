@@ -24,7 +24,77 @@ function expandTerms(query) {
   return [...expanded];
 }
 
-export async function searchHub({ query, startDate, endDate, source, topic, entityType }) {
+function applyActorScope(actor, where, values) {
+  if (!actor) {
+    where.push("1=0");
+    return;
+  }
+  if (actor.role === "ADMIN") {
+    return;
+  }
+
+  if (actor.role === "CLERK") {
+    where.push(`(
+      (entity_type = 'receipt' AND EXISTS (
+        SELECT 1 FROM receipts r
+        WHERE r.id = CAST(search_documents.entity_id AS UNSIGNED)
+          AND r.site_id = ?
+      ))
+    )`);
+    values.push(actor.siteId);
+    return;
+  }
+
+  if (["PLANNER", "PLANNER_SUPERVISOR"].includes(actor.role)) {
+    where.push(`(
+      (entity_type = 'work_order' AND EXISTS (
+        SELECT 1
+        FROM work_orders wo
+        JOIN production_plans pp ON pp.id = wo.plan_id
+        WHERE wo.id = CAST(search_documents.entity_id AS UNSIGNED)
+          AND pp.site_id = ?
+      ))
+      OR
+      (entity_type = 'production_plan' AND EXISTS (
+        SELECT 1 FROM production_plans pp
+        WHERE pp.id = CAST(search_documents.entity_id AS UNSIGNED)
+          AND pp.site_id = ?
+      ))
+      OR
+      (entity_type = 'plan_adjustment' AND EXISTS (
+        SELECT 1
+        FROM plan_adjustments pa
+        JOIN production_plans pp ON pp.id = pa.plan_id
+        WHERE pa.id = CAST(search_documents.entity_id AS UNSIGNED)
+          AND pp.site_id = ?
+      ))
+    )`);
+    values.push(actor.siteId, actor.siteId, actor.siteId);
+    return;
+  }
+
+  if (actor.role === "HR") {
+    where.push("entity_type = 'candidate'");
+    return;
+  }
+
+  if (actor.role === "INTERVIEWER") {
+    where.push(`(
+      entity_type = 'candidate' AND EXISTS (
+        SELECT 1
+        FROM interviewer_candidate_assignments ica
+        WHERE ica.candidate_id = CAST(search_documents.entity_id AS UNSIGNED)
+          AND ica.interviewer_user_id = ?
+      )
+    )`);
+    values.push(actor.id);
+    return;
+  }
+
+  where.push("1=0");
+}
+
+export async function searchHub({ actor, query, startDate, endDate, source, topic, entityType }) {
   const terms = expandTerms(query || "");
   const likePredicates = terms.map(() => "(title LIKE ? OR body LIKE ? OR tags LIKE ?)").join(" OR ");
   const values = [];
@@ -53,6 +123,8 @@ export async function searchHub({ query, startDate, endDate, source, topic, enti
     where.push("entity_type = ?");
     values.push(entityType);
   }
+
+  applyActorScope(actor, where, values);
 
   const [rows] = await pool.execute(
     `SELECT entity_type, entity_id, title, body, tags, source, topic, created_at

@@ -5,6 +5,7 @@ import { pool } from "../db.js";
 import { config } from "../config.js";
 import { AppError, assert } from "../utils/errors.js";
 import { writeAudit } from "./audit-service.js";
+import { logger } from "../utils/logger.js";
 
 export async function login(username, password) {
   const [rows] = await pool.execute(
@@ -17,6 +18,7 @@ export async function login(username, password) {
 
   const user = rows[0];
   if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    logger.warn("auth", "Login blocked due to account lock", { username });
     throw new AppError(423, "Account locked due to failed attempts");
   }
 
@@ -33,6 +35,11 @@ export async function login(username, password) {
        WHERE id = ?`,
       [attempts, lockedUntil, user.id]
     );
+    logger.warn("auth", "Invalid login attempt", {
+      username,
+      attempts,
+      locked: Boolean(lockedUntil)
+    });
     throw new AppError(401, "Invalid username or password");
   }
 

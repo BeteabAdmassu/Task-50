@@ -149,7 +149,7 @@ test("approvePlanAdjustment applies after_snapshot updates and line upserts", as
   };
 
   pool.getConnection = async () => conn;
-  const result = await approvePlanAdjustment(5, { id: 2, role: "PLANNER_SUPERVISOR" });
+  const result = await approvePlanAdjustment(5, { id: 2, role: "PLANNER_SUPERVISOR", siteId: 1 });
   assert.equal(result.ok, true);
   assert.equal(updatedPlan, true);
   assert.equal(lineUpserts, 1);

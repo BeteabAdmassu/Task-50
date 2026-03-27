@@ -48,8 +48,11 @@ node scripts/seed-users.js
 
 ```bash
 cd ../frontend
+cp .env.example .env
 npm install
 npm run dev
 ```
 
-Default backend URL is `http://localhost:4000`.
+Frontend API base is configurable with `VITE_API_BASE_URL`.
+- If not set, frontend defaults to `${window.location.protocol}//${window.location.hostname}:4000/api`.
+- Example for LAN usage is provided in `frontend/.env.example`.

@@ -12,7 +12,8 @@ INSERT INTO permissions (code, description) VALUES
   ('NOTIFY_PUBLISH', 'Publish notifications'),
   ('MESSAGE_QUEUE', 'Manage offline message queue'),
   ('RULES_WRITE', 'Manage scoring rules'),
-  ('RULES_SCORE', 'Calculate qualification scores')
+  ('RULES_SCORE', 'Calculate qualification scores'),
+  ('SENSITIVE_DATA_VIEW', 'View unmasked sensitive candidate fields')
 ON DUPLICATE KEY UPDATE description = VALUES(description);
 
 INSERT INTO role_permissions (role_code, permission_id)
@@ -32,7 +33,7 @@ SELECT 'PLANNER_SUPERVISOR', p.id FROM permissions p WHERE p.code IN ('MPS_WRITE
 ON DUPLICATE KEY UPDATE role_code = role_code;
 
 INSERT INTO role_permissions (role_code, permission_id)
-SELECT 'HR', p.id FROM permissions p WHERE p.code IN ('CANDIDATE_READ', 'NOTIFY_PUBLISH', 'RULES_WRITE', 'RULES_SCORE')
+SELECT 'HR', p.id FROM permissions p WHERE p.code IN ('CANDIDATE_READ', 'NOTIFY_PUBLISH', 'RULES_WRITE', 'RULES_SCORE', 'SENSITIVE_DATA_VIEW')
 ON DUPLICATE KEY UPDATE role_code = role_code;
 
 INSERT INTO role_permissions (role_code, permission_id)

@@ -6,6 +6,7 @@ const router = new Router({ prefix: "/api/search" });
 
 router.get("/", requireAuth, async (ctx) => {
   ctx.body = await searchHub({
+    actor: ctx.state.user,
     query: ctx.query.q,
     startDate: ctx.query.startDate,
     endDate: ctx.query.endDate,

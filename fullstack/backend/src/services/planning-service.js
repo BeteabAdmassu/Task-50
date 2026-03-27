@@ -2,9 +2,56 @@ import { pool, withTx } from "../db.js";
 import { AppError, assert } from "../utils/errors.js";
 import { writeAudit } from "./audit-service.js";
 
+function canCrossSite(actor) {
+  return actor.role === "ADMIN";
+}
+
+function assertSiteAccess(actor, siteId, message = "Access denied for site") {
+  if (!canCrossSite(actor) && Number(actor.siteId) !== Number(siteId)) {
+    throw new AppError(403, message);
+  }
+}
+
+async function getPlanWithAccess(planId, actor, conn = null) {
+  const queryable = conn || pool;
+  const [rows] = await queryable.execute(
+    `SELECT id, site_id, plan_name, start_week, status
+     FROM production_plans
+     WHERE id = ?`,
+    [planId]
+  );
+  assert(rows.length, 404, "Production plan not found");
+  assertSiteAccess(actor, rows[0].site_id, "Cannot access production plan for another site");
+  return rows[0];
+}
+
+async function getWorkOrderWithAccess(workOrderId, actor, conn = null) {
+  const queryable = conn || pool;
+  const [rows] = await queryable.execute(
+    `SELECT wo.id, wo.plan_id, pp.site_id
+     FROM work_orders wo
+     JOIN production_plans pp ON pp.id = wo.plan_id
+     WHERE wo.id = ?`,
+    [workOrderId]
+  );
+  assert(rows.length, 404, "Work order not found");
+  assertSiteAccess(actor, rows[0].site_id, "Cannot access work order for another site");
+  return rows[0];
+}
+
 export async function upsertMpsPlan(input, actor) {
   assert(input.siteId, 400, "siteId is required");
   assert(Array.isArray(input.weeks) && input.weeks.length === 12, 400, "Exactly 12 weeks required");
+  assertSiteAccess(actor, input.siteId, "Cannot create or update plans for another site");
+
+  const [beforeRows] = await pool.execute(
+    `SELECT id, site_id, plan_name, start_week, status
+     FROM production_plans
+     WHERE site_id = ? AND start_week = ?`,
+    [input.siteId, input.startWeek]
+  );
+  const beforeValue = beforeRows.length ? beforeRows[0] : null;
+
   await pool.execute(
     `INSERT INTO production_plans
       (site_id, plan_name, start_week, status, created_by)
@@ -32,16 +79,17 @@ export async function upsertMpsPlan(input, actor) {
 
   await writeAudit({
     actorUserId: actor.id,
-    action: "UPDATE",
+    action: beforeValue ? "UPDATE" : "CREATE",
     entityType: "production_plan",
     entityId: planId,
-    beforeValue: null,
+    beforeValue,
     afterValue: input
   });
   return { id: planId };
 }
 
-export async function runMrp(planId) {
+export async function runMrp(planId, actor) {
+  await getPlanWithAccess(planId, actor);
   const [planLines] = await pool.execute(
     `SELECT ppl.item_code, SUM(ppl.planned_qty) AS total_qty
      FROM production_plan_lines ppl
@@ -78,6 +126,7 @@ export async function runMrp(planId) {
 }
 
 export async function createWorkOrder(input, actor) {
+  await getPlanWithAccess(input.planId, actor);
   const [result] = await pool.execute(
     `INSERT INTO work_orders
       (plan_id, item_code, qty_target, status, scheduled_start, scheduled_end, created_by)
@@ -96,6 +145,7 @@ export async function createWorkOrder(input, actor) {
 }
 
 export async function logWorkOrderEvent(workOrderId, input, actor) {
+  await getWorkOrderWithAccess(workOrderId, actor);
   assert(["PRODUCTION", "REWORK", "DOWNTIME"].includes(input.eventType), 400, "Invalid event type");
   if (input.eventType === "DOWNTIME") {
     assert(input.reasonCode, 400, "Downtime requires reason code");
@@ -118,6 +168,7 @@ export async function logWorkOrderEvent(workOrderId, input, actor) {
 
 export async function requestPlanAdjustment(planId, input, actor) {
   assert(input.reasonCode, 400, "Reason code required");
+  await getPlanWithAccess(planId, actor);
   const [result] = await pool.execute(
     `INSERT INTO plan_adjustments
       (plan_id, reason_code, requested_by, status, before_snapshot, after_snapshot)
@@ -162,6 +213,7 @@ export async function approvePlanAdjustment(adjustmentId, actor) {
     );
     assert(planRows.length, 404, "Production plan not found");
     const planBefore = planRows[0];
+    assertSiteAccess(actor, planBefore.site_id, "Cannot approve adjustments for another site");
 
     if (
       snapshot.planName !== undefined ||
