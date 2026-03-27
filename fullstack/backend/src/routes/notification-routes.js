@@ -15,20 +15,23 @@ router.post("/subscriptions", requireAuth, async (ctx) => {
 });
 
 router.post("/events", requireAuth, requirePermission("NOTIFY_PUBLISH"), async (ctx) => {
-  await publishEvent(ctx.request.body.eventType, ctx.request.body.payload || {});
-  ctx.body = { ok: true };
+  ctx.body = await publishEvent(
+    ctx.request.body.eventType,
+    ctx.request.body.payload || {},
+    ctx.state.user
+  );
 });
 
 router.post("/dispatch", requireAuth, requirePermission("NOTIFY_PUBLISH"), async (ctx) => {
-  ctx.body = await processPendingNotifications();
+  ctx.body = await processPendingNotifications(ctx.state.user);
 });
 
 router.post("/offline-queue", requireAuth, requirePermission("MESSAGE_QUEUE"), async (ctx) => {
-  ctx.body = await queueOfflineMessage(ctx.request.body);
+  ctx.body = await queueOfflineMessage(ctx.request.body, ctx.state.user);
 });
 
 router.post("/offline-queue/retry", requireAuth, requirePermission("MESSAGE_QUEUE"), async (ctx) => {
-  ctx.body = await retryFailedMessages();
+  ctx.body = await retryFailedMessages(ctx.state.user);
 });
 
 export default router;

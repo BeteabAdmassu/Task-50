@@ -28,6 +28,8 @@ const mpsForm = ref({ siteId: auth.user?.siteId || 1, planName: "12 Week Plan", 
 const mrpPlanId = ref("");
 const mrpOutput = ref([]);
 const workOrderForm = ref({ planId: "", itemCode: "", qtyTarget: 0, scheduledStart: "", scheduledEnd: "" });
+const workOrderEventForm = ref({ workOrderId: "", eventType: "PRODUCTION", qty: 0, reasonCode: "", notes: "" });
+const workOrderEventStatus = ref("");
 const adjustmentForm = ref({ planId: "", reasonCode: "", before: "{}", after: "{}" });
 const candidateForm = ref({ fullName: "", email: "", phone: "", dob: "", ssnLast4: "", source: "PORTAL", formData: [] });
 const appFormFields = ref([]);
@@ -81,6 +83,25 @@ async function runMrp() {
 
 async function createWorkOrder() {
   await apiRequest("/planning/work-orders", { method: "POST", body: JSON.stringify(workOrderForm.value) });
+}
+
+async function logWorkOrderEvent() {
+  workOrderEventStatus.value = "";
+  if (workOrderEventForm.value.eventType === "DOWNTIME" && !workOrderEventForm.value.reasonCode.trim()) {
+    workOrderEventStatus.value = "Downtime reason code is required.";
+    return;
+  }
+
+  await apiRequest(`/planning/work-orders/${workOrderEventForm.value.workOrderId}/events`, {
+    method: "POST",
+    body: JSON.stringify({
+      eventType: workOrderEventForm.value.eventType,
+      qty: Number(workOrderEventForm.value.qty) || 0,
+      reasonCode: workOrderEventForm.value.reasonCode || null,
+      notes: workOrderEventForm.value.notes || null
+    })
+  });
+  workOrderEventStatus.value = "Work order event logged.";
 }
 
 async function requestAdjustment() {
@@ -226,6 +247,22 @@ async function logout() {
         <input v-model="workOrderForm.scheduledStart" type="datetime-local" />
         <input v-model="workOrderForm.scheduledEnd" type="datetime-local" />
         <button @click="createWorkOrder">Create work order</button>
+
+        <h3>Log work order event</h3>
+        <input v-model="workOrderEventForm.workOrderId" placeholder="Work Order ID" />
+        <select v-model="workOrderEventForm.eventType">
+          <option value="PRODUCTION">Production</option>
+          <option value="REWORK">Rework</option>
+          <option value="DOWNTIME">Downtime</option>
+        </select>
+        <input v-model.number="workOrderEventForm.qty" type="number" placeholder="Quantity" />
+        <input
+          v-model="workOrderEventForm.reasonCode"
+          :placeholder="workOrderEventForm.eventType === 'DOWNTIME' ? 'Reason code (required)' : 'Reason code (optional)'"
+        />
+        <textarea v-model="workOrderEventForm.notes" placeholder="Notes" />
+        <button @click="logWorkOrderEvent">Log event</button>
+        <p v-if="workOrderEventStatus">{{ workOrderEventStatus }}</p>
       </article>
 
       <article v-if="activePanel === 'adjustments'" class="card form-grid">
@@ -244,7 +281,7 @@ async function logout() {
         <input v-model="candidateForm.phone" placeholder="Phone" />
         <input v-model="candidateForm.dob" type="date" />
         <input v-model="candidateForm.ssnLast4" placeholder="SSN last 4" maxlength="4" />
-        <input type="file" accept=".pdf,.jpg,.jpeg,.png" @change="(e) => (candidateAttachment = e.target.files?.[0] || null)" />
+        <input type="file" accept=".pdf,.jpg,.jpeg,.png" @change="(e) => (candidateAttachment.value = e.target.files?.[0] || null)" />
         <div v-for="field in appFormFields" :key="field.field_key">
           <input
             v-model="getFormEntry(field.field_key).fieldValue"

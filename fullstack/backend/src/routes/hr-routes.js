@@ -6,10 +6,13 @@ import {
   optionalAuth
 } from "../middleware/auth.js";
 import { pool } from "../db.js";
+import { AppError } from "../utils/errors.js";
 import {
   attachCandidateFile,
+  canActorAttachToCandidate,
   createCandidateApplication,
-  getCandidate
+  getCandidate,
+  verifyCandidateUploadToken
 } from "../services/hr-service.js";
 
 const router = new Router({ prefix: "/api/hr" });
@@ -29,7 +32,22 @@ router.post("/applications", optionalAuth, async (ctx) => {
 
 router.post("/applications/:id/attachments", optionalAuth, async (ctx) => {
   const file = ctx.request.files?.file;
-  ctx.body = await attachCandidateFile(ctx.params.id, file, ctx.state.user || null);
+  const actor = ctx.state.user;
+
+  const candidateId = ctx.params.id;
+  const uploadToken = ctx.headers["x-candidate-upload-token"];
+  const tokenAuthorized = verifyCandidateUploadToken(uploadToken, candidateId);
+  let actorAuthorized = false;
+
+  if (actor) {
+    actorAuthorized = await canActorAttachToCandidate(candidateId, actor);
+  }
+
+  if (!tokenAuthorized && !actorAuthorized) {
+    throw new AppError(403, "Attachment upload requires authorized user or valid candidate upload token");
+  }
+
+  ctx.body = await attachCandidateFile(candidateId, file, actor || null);
 });
 
 router.get(

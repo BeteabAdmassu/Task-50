@@ -1,7 +1,7 @@
 import Koa from "koa";
 import Router from "koa-router";
 import cors from "@koa/cors";
-import koaBody from "koa-body";
+import { koaBody } from "koa-body";
 import { errorHandler } from "./middleware/error-handler.js";
 import authRoutes from "./routes/auth-routes.js";
 import receivingRoutes from "./routes/receiving-routes.js";

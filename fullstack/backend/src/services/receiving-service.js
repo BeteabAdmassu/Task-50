@@ -65,6 +65,10 @@ export async function createReceipt(input, actor) {
     );
 
     for (const line of input.lines) {
+      const qtyExpected = Number(line.qtyExpected);
+      const qtyReceived = Number(line.qtyReceived);
+      const qtyDelta = qtyReceived - qtyExpected;
+      
       await conn.execute(
         `INSERT INTO receipt_lines
           (receipt_id, po_line_no, sku, lot_no, qty_expected, qty_received,
@@ -75,31 +79,43 @@ export async function createReceipt(input, actor) {
           line.poLineNo,
           line.sku,
           line.lotNo || null,
-          line.qtyExpected,
-          line.qtyReceived,
+          qtyExpected,
+          qtyReceived,
           line.inspectionStatus || "PENDING",
           line.storageLocationId || null
         ]
       );
 
-      if (line.discrepancyType) {
-        assert(
-          allowedDiscrepancies.includes(line.discrepancyType),
-          400,
-          "Invalid discrepancy type"
+      if (qtyDelta !== 0 || line.discrepancyType) {
+        const discrepancyType = line.discrepancyType || (
+          qtyDelta > 0 ? "OVER" : qtyDelta < 0 ? "SHORT" : null
         );
-        await conn.execute(
-          `INSERT INTO receipt_discrepancies
-            (receipt_id, po_line_no, discrepancy_type, qty_delta, disposition_note)
-           VALUES (?, ?, ?, ?, ?)`,
-          [
-            header.insertId,
-            line.poLineNo,
-            line.discrepancyType,
-            line.qtyDelta || 0,
-            line.dispositionNote || null
-          ]
-        );
+        
+        if (discrepancyType) {
+          assert(
+            allowedDiscrepancies.includes(discrepancyType),
+            400,
+            "Invalid discrepancy type"
+          );
+          assert(
+            line.dispositionNote && line.dispositionNote.trim().length > 0,
+            400,
+            "Disposition note required for quantity discrepancies"
+          );
+          
+          await conn.execute(
+            `INSERT INTO receipt_discrepancies
+              (receipt_id, po_line_no, discrepancy_type, qty_delta, disposition_note)
+             VALUES (?, ?, ?, ?, ?)`,
+            [
+              header.insertId,
+              line.poLineNo,
+              discrepancyType,
+              qtyDelta,
+              line.dispositionNote || null
+            ]
+          );
+        }
       }
     }
 
@@ -118,14 +134,62 @@ export async function createReceipt(input, actor) {
 }
 
 export async function closeReceipt(receiptId, actor) {
-  const [discrepancies] = await pool.execute(
+  const [receipts] = await pool.execute(
+    `SELECT id, site_id, status, received_by
+     FROM receipts WHERE id = ?`,
+    [receiptId]
+  );
+  assert(receipts.length, 404, "Receipt not found");
+  const receipt = receipts[0];
+  
+  assert(receipt.status === "OPEN", 400, "Receipt is not open");
+
+  if (actor.role === "CLERK") {
+    assert(Number(actor.siteId) === Number(receipt.site_id), 403, "Clerks can only close receipts for their site");
+  } else if (!["ADMIN", "PLANNER_SUPERVISOR"].includes(actor.role)) {
+    throw new AppError(403, "Only site clerks, supervisors, or admins can close receipts");
+  }
+  
+  const [unresolvedDiscrepancies] = await pool.execute(
     `SELECT id
      FROM receipt_discrepancies
      WHERE receipt_id = ?
        AND (disposition_note IS NULL OR disposition_note = '')`,
     [receiptId]
   );
-  assert(!discrepancies.length, 400, "All discrepancies must have disposition notes");
+  assert(!unresolvedDiscrepancies.length, 400, "All discrepancies must have disposition notes");
+  
+  const [quantityDiscrepancies] = await pool.execute(
+    `SELECT rl.id, rl.po_line_no, rl.qty_expected, rl.qty_received,
+            (rl.qty_received - rl.qty_expected) AS qty_delta,
+            rd.id AS discrepancy_id,
+            rd.discrepancy_type,
+            rd.disposition_note
+     FROM receipt_lines rl
+     LEFT JOIN receipt_discrepancies rd ON rd.receipt_id = rl.receipt_id AND rd.po_line_no = rl.po_line_no
+     WHERE rl.receipt_id = ?
+       AND rl.qty_received != rl.qty_expected`,
+    [receiptId]
+  );
+
+  const invalidDiscrepancies = quantityDiscrepancies.filter((d) => {
+    if (!d.discrepancy_id) return true;
+    if (!allowedDiscrepancies.includes(d.discrepancy_type)) return true;
+    if (!d.disposition_note || String(d.disposition_note).trim() === "") return true;
+    return false;
+  });
+
+  if (invalidDiscrepancies.length > 0) {
+    throw new AppError(400, "Quantity discrepancies require valid type and disposition note", {
+      lines: invalidDiscrepancies.map((d) => ({
+        poLineNo: d.po_line_no,
+        expected: d.qty_expected,
+        received: d.qty_received,
+        delta: d.qty_delta,
+        discrepancyType: d.discrepancy_type || null
+      }))
+    });
+  }
 
   await pool.execute("UPDATE receipts SET status = 'CLOSED', closed_at = NOW() WHERE id = ?", [
     receiptId
@@ -135,8 +199,8 @@ export async function closeReceipt(receiptId, actor) {
     action: "APPROVE",
     entityType: "receipt",
     entityId: receiptId,
-    beforeValue: { status: "OPEN" },
-    afterValue: { status: "CLOSED" }
+    beforeValue: { status: "OPEN", site_id: receipt.site_id },
+    afterValue: { status: "CLOSED", site_id: receipt.site_id }
   });
 }
 

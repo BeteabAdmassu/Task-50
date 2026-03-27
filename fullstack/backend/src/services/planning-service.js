@@ -138,7 +138,7 @@ export async function requestPlanAdjustment(planId, input, actor) {
 export async function approvePlanAdjustment(adjustmentId, actor) {
   return withTx(async (conn) => {
     const [rows] = await conn.execute(
-      `SELECT id, plan_id, after_snapshot, status
+      `SELECT id, plan_id, before_snapshot, after_snapshot, status
        FROM plan_adjustments WHERE id = ? FOR UPDATE`,
       [adjustmentId]
     );
@@ -147,6 +147,56 @@ export async function approvePlanAdjustment(adjustmentId, actor) {
     assert(adj.status === "PENDING", 409, "Adjustment is not pending");
     if (!["ADMIN", "PLANNER_SUPERVISOR"].includes(actor.role)) {
       throw new AppError(403, "Supervisor approval required");
+    }
+
+    const snapshot =
+      typeof adj.after_snapshot === "string"
+        ? JSON.parse(adj.after_snapshot)
+        : adj.after_snapshot || {};
+
+    const [planRows] = await conn.execute(
+      `SELECT id, site_id, plan_name, start_week, status
+       FROM production_plans
+       WHERE id = ? FOR UPDATE`,
+      [adj.plan_id]
+    );
+    assert(planRows.length, 404, "Production plan not found");
+    const planBefore = planRows[0];
+
+    if (
+      snapshot.planName !== undefined ||
+      snapshot.startWeek !== undefined ||
+      snapshot.status !== undefined
+    ) {
+      await conn.execute(
+        `UPDATE production_plans
+         SET plan_name = COALESCE(?, plan_name),
+             start_week = COALESCE(?, start_week),
+             status = COALESCE(?, status),
+             updated_at = NOW()
+         WHERE id = ?`,
+        [
+          snapshot.planName ?? null,
+          snapshot.startWeek ?? null,
+          snapshot.status ?? null,
+          adj.plan_id
+        ]
+      );
+    }
+
+    if (Array.isArray(snapshot.weeks)) {
+      for (const week of snapshot.weeks) {
+        assert(week.weekIndex != null, 400, "weekIndex required in adjustment snapshot");
+        assert(week.itemCode, 400, "itemCode required in adjustment snapshot");
+        assert(week.plannedQty != null, 400, "plannedQty required in adjustment snapshot");
+        await conn.execute(
+          `INSERT INTO production_plan_lines
+            (plan_id, week_index, item_code, planned_qty)
+           VALUES (?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE planned_qty = VALUES(planned_qty)`,
+          [adj.plan_id, week.weekIndex, week.itemCode, week.plannedQty]
+        );
+      }
     }
 
     await conn.execute(
@@ -160,8 +210,36 @@ export async function approvePlanAdjustment(adjustmentId, actor) {
       action: "APPROVE",
       entityType: "plan_adjustment",
       entityId: adjustmentId,
-      beforeValue: { status: "PENDING" },
-      afterValue: { status: "APPROVED" },
+      beforeValue: {
+        status: "PENDING",
+        planId: adj.plan_id,
+        beforeSnapshot:
+          typeof adj.before_snapshot === "string"
+            ? JSON.parse(adj.before_snapshot)
+            : adj.before_snapshot
+      },
+      afterValue: {
+        status: "APPROVED",
+        planId: adj.plan_id,
+        appliedSnapshot: snapshot
+      },
+      conn
+    });
+
+    const [planAfterRows] = await conn.execute(
+      `SELECT id, site_id, plan_name, start_week, status
+       FROM production_plans
+       WHERE id = ?`,
+      [adj.plan_id]
+    );
+
+    await writeAudit({
+      actorUserId: actor.id,
+      action: "UPDATE",
+      entityType: "production_plan",
+      entityId: adj.plan_id,
+      beforeValue: planBefore,
+      afterValue: planAfterRows[0],
       conn
     });
     return { ok: true };

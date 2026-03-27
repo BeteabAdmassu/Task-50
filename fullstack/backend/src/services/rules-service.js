@@ -1,5 +1,6 @@
 import { pool, withTx } from "../db.js";
 import { AppError, assert } from "../utils/errors.js";
+import { writeAudit } from "./audit-service.js";
 
 const defaultWeights = {
   coursework: 0.4,
@@ -37,10 +38,23 @@ export async function createRuleVersion(input, actor) {
       actor.id
     ]
   );
+  await writeAudit({
+    actorUserId: actor.id,
+    action: "CREATE",
+    entityType: "scoring_rule_version",
+    entityId: result.insertId,
+    beforeValue: null,
+    afterValue: {
+      versionName: input.versionName,
+      weights,
+      retakePolicy: input.retakePolicy || "HIGHEST_SCORE",
+      effectiveDate: input.effectiveDate
+    }
+  });
   return { id: result.insertId };
 }
 
-export async function scoreQualification(input) {
+export async function scoreQualification(input, actor) {
   const [[rule]] = await pool.execute(
     `SELECT id, weights_json, retake_policy
      FROM scoring_rule_versions
@@ -77,6 +91,21 @@ export async function scoreQualification(input) {
     ]
   );
 
+  await writeAudit({
+    actorUserId: actor.id,
+    action: "CREATE",
+    entityType: "qualification_score",
+    entityId: result.insertId,
+    beforeValue: null,
+    afterValue: {
+      candidateId: input.candidateId,
+      ruleVersionId: input.ruleVersionId,
+      weightedFinal,
+      gpa,
+      qualityPoints
+    }
+  });
+
   return {
     scoreId: result.insertId,
     weightedFinal,
@@ -93,7 +122,7 @@ function chooseScore(scores, policy) {
   return Number(scores[scores.length - 1]);
 }
 
-export async function backtrackRecalculate(ruleVersionId) {
+export async function backtrackRecalculate(ruleVersionId, actor) {
   return withTx(async (conn) => {
     const [rows] = await conn.execute(
       `SELECT id, candidate_id, credit_hours
@@ -109,7 +138,25 @@ export async function backtrackRecalculate(ruleVersionId) {
          WHERE id = ?`,
         [row.id]
       );
+      await writeAudit({
+        actorUserId: actor.id,
+        action: "UPDATE",
+        entityType: "qualification_score",
+        entityId: row.id,
+        beforeValue: { recalculationPending: false, ruleVersionId: Number(ruleVersionId) },
+        afterValue: { recalculationPending: true, ruleVersionId: Number(ruleVersionId) },
+        conn
+      });
     }
+    await writeAudit({
+      actorUserId: actor.id,
+      action: "UPDATE",
+      entityType: "scoring_rule_version",
+      entityId: ruleVersionId,
+      beforeValue: { recalculationRequested: false },
+      afterValue: { recalculationRequested: true, affectedScores: rows.length },
+      conn
+    });
     return { markedForRecalc: rows.length };
   });
 }

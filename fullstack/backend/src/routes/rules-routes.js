@@ -13,7 +13,7 @@ router.post("/versions", requireAuth, requirePermission("RULES_WRITE"), async (c
 });
 
 router.post("/score", requireAuth, requirePermission("RULES_SCORE"), async (ctx) => {
-  ctx.body = await scoreQualification(ctx.request.body);
+  ctx.body = await scoreQualification(ctx.request.body, ctx.state.user);
 });
 
 router.post(
@@ -21,7 +21,7 @@ router.post(
   requireAuth,
   requirePermission("RULES_WRITE"),
   async (ctx) => {
-    ctx.body = await backtrackRecalculate(ctx.params.id);
+    ctx.body = await backtrackRecalculate(ctx.params.id, ctx.state.user);
   }
 );
 

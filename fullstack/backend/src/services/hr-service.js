@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { pool, withTx } from "../db.js";
 import { config } from "../config.js";
@@ -9,6 +10,7 @@ import { writeAudit } from "./audit-service.js";
 
 const allowedMimeTypes = new Set(["application/pdf", "image/jpeg", "image/png"]);
 const maxBytes = 20 * 1024 * 1024;
+const candidateUploadTokenTtlSeconds = 60 * 60 * 24;
 
 export async function createCandidateApplication(input, actor) {
   assert(input.fullName, 400, "Full name is required");
@@ -60,8 +62,52 @@ export async function createCandidateApplication(input, actor) {
       conn
     });
 
-    return { id: appId, duplicateFlag: duplicate };
+    return {
+      id: appId,
+      duplicateFlag: duplicate,
+      uploadToken: issueCandidateUploadToken(appId)
+    };
   });
+}
+
+export function issueCandidateUploadToken(candidateId) {
+  return jwt.sign(
+    {
+      purpose: "CANDIDATE_ATTACHMENT",
+      candidateId: String(candidateId)
+    },
+    config.jwtSecret,
+    { expiresIn: candidateUploadTokenTtlSeconds }
+  );
+}
+
+export function verifyCandidateUploadToken(token, candidateId) {
+  if (!token) return false;
+  try {
+    const payload = jwt.verify(token, config.jwtSecret);
+    return (
+      payload.purpose === "CANDIDATE_ATTACHMENT" &&
+      String(payload.candidateId) === String(candidateId)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function canActorAttachToCandidate(candidateId, actor) {
+  if (!actor) return false;
+  if (["ADMIN", "HR"].includes(actor.role)) return true;
+  if (actor.role === "INTERVIEWER") {
+    const [rows] = await pool.execute(
+      `SELECT 1
+       FROM interviewer_candidate_assignments
+       WHERE interviewer_user_id = ? AND candidate_id = ?
+       LIMIT 1`,
+      [actor.id, candidateId]
+    );
+    return rows.length > 0;
+  }
+  return false;
 }
 
 async function checkFormCompleteness(formData) {
@@ -95,6 +141,9 @@ export async function attachCandidateFile(candidateId, file, actor) {
   assert(file, 400, "File required");
   assert(allowedMimeTypes.has(file.type), 400, "Only PDF/JPG/PNG allowed");
   assert(file.size <= maxBytes, 400, "File exceeds 20 MB");
+
+  const [candidates] = await pool.execute("SELECT id FROM candidates WHERE id = ?", [candidateId]);
+  assert(candidates.length, 404, "Candidate not found");
 
   await fs.mkdir(config.uploadDir, { recursive: true });
   const ext = path.extname(file.name || "").toLowerCase();
