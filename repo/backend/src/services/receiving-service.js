@@ -231,12 +231,19 @@ export async function closeReceipt(receiptId, actor) {
   });
 }
 
-export async function recommendPutaway({ sku, lotNo, quantity }) {
+export async function recommendPutaway({ siteId, sku, lotNo, quantity }, actor) {
+  assert(siteId, 400, "siteId required");
+  if (actor.role !== "ADMIN") {
+    assert(Number(actor.siteId) === Number(siteId), 403, "Putaway recommendations are limited to your site");
+  }
+
   const [bins] = await pool.execute(
     `SELECT id, code, capacity_qty, occupied_qty, current_sku, current_lot
      FROM inventory_locations
-     WHERE is_active = 1
-     ORDER BY occupied_qty ASC, code ASC`
+     WHERE site_id = ?
+       AND is_active = 1
+     ORDER BY occupied_qty ASC, code ASC`,
+    [siteId]
   );
 
   for (const bin of bins) {

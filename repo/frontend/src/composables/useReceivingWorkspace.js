@@ -1,15 +1,25 @@
 import { ref } from "vue";
-import { apiRequest } from "../api.js";
+import { apiFormRequest, apiRequest } from "../api.js";
 
 export function useReceivingWorkspace(auth) {
   const dockForm = ref({ siteId: auth.user?.siteId || "", poNumber: "", startAt: "", endAt: "", notes: "" });
   const receiptForm = ref({
     siteId: auth.user?.siteId || "",
     poNumber: "",
-    lines: [{ poLineNo: "1", sku: "", lotNo: "", qtyExpected: 0, qtyReceived: 0, discrepancyType: "", dispositionNote: "" }]
+    lines: [{ poLineNo: "1", sku: "", lotNo: "", qtyExpected: 0, qtyReceived: 0, inspectionStatus: "PENDING", discrepancyType: "", dispositionNote: "" }]
   });
   const receiptCloseForm = ref({ receiptId: "" });
   const receiptCloseStatus = ref("");
+  const receiptDocumentForm = ref({
+    receiptId: "",
+    poLineNo: "",
+    lotNo: "",
+    storageLocationId: "",
+    title: "",
+    file: null
+  });
+  const receiptDocuments = ref([]);
+  const receiptDocumentStatus = ref("");
   const putawayInput = ref({ sku: "", lotNo: "", quantity: 0 });
   const putawayResult = ref(null);
 
@@ -49,8 +59,53 @@ export function useReceivingWorkspace(auth) {
   async function runPutaway() {
     putawayResult.value = await apiRequest("/receiving/putaway/recommend", {
       method: "POST",
-      body: JSON.stringify(putawayInput.value)
+      body: JSON.stringify({
+        ...putawayInput.value,
+        siteId: auth.user?.siteId || ""
+      })
     });
+  }
+
+  function onReceiptDocumentFileChange(event) {
+    receiptDocumentForm.value.file = event.target.files?.[0] || null;
+  }
+
+  async function uploadReceiptDocument() {
+    receiptDocumentStatus.value = "";
+    if (!receiptDocumentForm.value.receiptId) {
+      receiptDocumentStatus.value = "Receipt ID is required.";
+      return;
+    }
+    if (!receiptDocumentForm.value.file) {
+      receiptDocumentStatus.value = "Document file is required.";
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", receiptDocumentForm.value.file);
+    formData.append("poLineNo", receiptDocumentForm.value.poLineNo || "");
+    formData.append("lotNo", receiptDocumentForm.value.lotNo || "");
+    formData.append("storageLocationId", receiptDocumentForm.value.storageLocationId || "");
+    formData.append("title", receiptDocumentForm.value.title || "");
+
+    await apiFormRequest(
+      `/receiving/receipts/${receiptDocumentForm.value.receiptId}/documents`,
+      formData
+    );
+    receiptDocumentStatus.value = "Document uploaded.";
+    await loadReceiptDocuments();
+  }
+
+  async function loadReceiptDocuments() {
+    receiptDocumentStatus.value = "";
+    if (!receiptDocumentForm.value.receiptId) {
+      receiptDocumentStatus.value = "Receipt ID is required.";
+      return;
+    }
+    receiptDocuments.value = await apiRequest(
+      `/receiving/receipts/${receiptDocumentForm.value.receiptId}/documents`
+    );
+    receiptDocumentStatus.value = "Documents loaded.";
   }
 
   return {
@@ -58,11 +113,17 @@ export function useReceivingWorkspace(auth) {
     receiptForm,
     receiptCloseForm,
     receiptCloseStatus,
+    receiptDocumentForm,
+    receiptDocuments,
+    receiptDocumentStatus,
     putawayInput,
     putawayResult,
     submitDock,
     submitReceipt,
     closeReceipt,
-    runPutaway
+    runPutaway,
+    onReceiptDocumentFileChange,
+    uploadReceiptDocument,
+    loadReceiptDocuments
   };
 }

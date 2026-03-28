@@ -110,13 +110,47 @@ CREATE TABLE IF NOT EXISTS receipt_discrepancies (
 
 CREATE TABLE IF NOT EXISTS inventory_locations (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  site_id BIGINT NOT NULL,
   code VARCHAR(50) NOT NULL UNIQUE,
   capacity_qty DECIMAL(18,4) NOT NULL,
   occupied_qty DECIMAL(18,4) NOT NULL DEFAULT 0,
   current_sku VARCHAR(80) NULL,
   current_lot VARCHAR(80) NULL,
-  is_active TINYINT(1) NOT NULL DEFAULT 1
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  KEY idx_inventory_site_active (site_id, is_active)
 );
+
+SET @has_inventory_site_id = (
+  SELECT COUNT(*)
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'inventory_locations'
+    AND column_name = 'site_id'
+);
+SET @inventory_site_col_sql = IF(
+  @has_inventory_site_id = 0,
+  'ALTER TABLE inventory_locations ADD COLUMN site_id BIGINT NOT NULL DEFAULT 1 AFTER id',
+  'SELECT 1'
+);
+PREPARE inventory_site_col_stmt FROM @inventory_site_col_sql;
+EXECUTE inventory_site_col_stmt;
+DEALLOCATE PREPARE inventory_site_col_stmt;
+
+SET @has_inventory_site_idx = (
+  SELECT COUNT(*)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'inventory_locations'
+    AND index_name = 'idx_inventory_site_active'
+);
+SET @inventory_site_idx_sql = IF(
+  @has_inventory_site_idx = 0,
+  'CREATE INDEX idx_inventory_site_active ON inventory_locations (site_id, is_active)',
+  'SELECT 1'
+);
+PREPARE inventory_site_idx_stmt FROM @inventory_site_idx_sql;
+EXECUTE inventory_site_idx_stmt;
+DEALLOCATE PREPARE inventory_site_idx_stmt;
 
 CREATE TABLE IF NOT EXISTS production_plans (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

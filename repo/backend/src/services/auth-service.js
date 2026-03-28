@@ -10,7 +10,13 @@ import { logger } from "../utils/logger.js";
 export async function login(username, password) {
   const [rows] = await pool.execute(
     `SELECT id, username, role, password_hash, failed_login_attempts, locked_until,
-            site_id, department_id, sensitive_data_view
+            site_id, department_id,
+            EXISTS(
+              SELECT 1
+              FROM role_permissions rp
+              JOIN permissions p ON p.id = rp.permission_id
+              WHERE rp.role_code = users.role AND p.code = 'SENSITIVE_DATA_VIEW'
+            ) AS has_sensitive_permission
      FROM users WHERE username = ?`,
     [username]
   );
@@ -105,7 +111,7 @@ export async function login(username, password) {
       role: user.role,
       siteId: user.site_id,
       departmentId: user.department_id,
-      sensitiveDataView: Boolean(user.sensitive_data_view)
+      sensitiveDataView: Boolean(user.has_sensitive_permission)
     }
   };
 }

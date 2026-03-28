@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import jwt from "../backend/node_modules/jsonwebtoken/index.js";
+import bcrypt from "../backend/node_modules/bcryptjs/index.js";
 import app from "../backend/src/app.js";
 import { pool } from "../backend/src/db.js";
 import { config } from "../backend/src/config.js";
@@ -28,6 +29,51 @@ test("POST /api/hr/applications/:id/attachments rejects unauthenticated upload",
   assert.equal(response.status, 403);
   assert.match(body.error, /Attachment upload requires authorized user or valid candidate upload token/);
   await new Promise((resolve) => server.close(resolve));
+});
+
+test("POST /api/auth/login returns sensitiveDataView from permission mapping", async () => {
+  const passwordHash = await bcrypt.hash("CorrectPassword123", 4);
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM users WHERE username = ?")) {
+      return [[{
+        id: 77,
+        username: "candidate1",
+        role: "CANDIDATE",
+        password_hash: passwordHash,
+        failed_login_attempts: 0,
+        locked_until: null,
+        site_id: 1,
+        department_id: 1,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("failed_login_attempts = 0")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO sessions")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ username: "candidate1", password: "CorrectPassword123" })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.user.sensitiveDataView, false);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
 });
 
 test("POST /api/receiving/dock-appointments returns 409 on slot conflict", async () => {
@@ -127,6 +173,297 @@ test("POST /api/receiving/receipts/:id/close blocks clerk from other site", asyn
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/putaway/recommend denies cross-site clerk request", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-putaway-cross-site" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-putaway-cross-site",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/putaway/recommend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ siteId: 2, sku: "SKU-1", lotNo: "LOT-1", quantity: 10 })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 403);
+  assert.match(body.error, /Putaway recommendations are limited to your site/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/putaway/recommend requires siteId", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-putaway-site-required" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-putaway-site-required",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/putaway/recommend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ sku: "SKU-1", lotNo: "LOT-1", quantity: 10 })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(body.error, /siteId required/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/putaway/recommend returns same-site bin recommendation", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-putaway-success" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-putaway-success",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    if (sql.includes("FROM inventory_locations")) {
+      assert.equal(params[0], 1);
+      return [[{
+        id: 99,
+        code: "A-01",
+        capacity_qty: 100,
+        occupied_qty: 40,
+        current_sku: "SKU-1",
+        current_lot: "LOT-1"
+      }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/putaway/recommend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ siteId: 1, sku: "SKU-1", lotNo: "LOT-1", quantity: 10 })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.locationId, 99);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/putaway/recommend returns 409 when no valid site bin exists", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-putaway-no-bin" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-putaway-no-bin",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    if (sql.includes("FROM inventory_locations")) {
+      return [[{
+        id: 99,
+        code: "A-01",
+        capacity_qty: 20,
+        occupied_qty: 20,
+        current_sku: null,
+        current_lot: null
+      }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/putaway/recommend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ siteId: 1, sku: "SKU-1", lotNo: "LOT-1", quantity: 10 })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 409);
+  assert.match(body.error, /No valid location found for putaway/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/receipts captures inspection status per line", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-receipt-inspection" }, config.jwtSecret, { expiresIn: 3600 });
+  let capturedInspectionStatus = null;
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-receipt-inspection",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO receipts")) {
+        return [{ insertId: 555 }];
+      }
+      if (sql.includes("INSERT INTO receipt_lines")) {
+        capturedInspectionStatus = params[6];
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/receipts`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      siteId: 1,
+      poNumber: "PO-INSPECT-1",
+      lines: [
+        {
+          poLineNo: "1",
+          sku: "SKU-1",
+          lotNo: "LOT-1",
+          qtyExpected: 10,
+          qtyReceived: 10,
+          inspectionStatus: "FAIL"
+        }
+      ]
+    })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.id, 555);
+  assert.equal(capturedInspectionStatus, "FAIL");
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
 });
 
 test("POST /api/hr/applications creates candidate and returns upload token", async () => {

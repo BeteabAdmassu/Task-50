@@ -48,6 +48,7 @@ export const config = {
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "password",
     database: process.env.DB_NAME || "forgeops",
-    connectionLimit: 10
+    connectionLimit: 10,
+    timezone: "Z"
   }
 };

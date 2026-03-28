@@ -4,7 +4,7 @@ services:
     container_name: forgeops-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: forgeops
     ports:
       - "3306:3306"
@@ -33,7 +33,7 @@ services:
       DB_HOST: db
       DB_PORT: 3306
       DB_USER: root
-      DB_PASSWORD: rootpassword
+      DB_PASSWORD: password
       DB_NAME: forgeops
       JWT_SECRET: forgeops-docker-jwt-secret
       ENCRYPTION_KEY_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

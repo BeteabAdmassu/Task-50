@@ -57,10 +57,11 @@ Use this section only for local non-Docker runs.
 1. Create a MySQL database named `forgeops`.
 2. Apply `backend/schema.sql`, then `backend/seed.sql`.
    - If upgrading an existing DB, apply schema updates for:
-     - `receipt_documents` table
-     - `search_documents` unique key `uq_search_entity`
-     - `notification_subscriptions.dnd_start` and `notification_subscriptions.dnd_end`
-     - `application_attachment_requirements` (if missing)
+      - `receipt_documents` table
+      - `search_documents` unique key `uq_search_entity`
+      - `notification_subscriptions.dnd_start` and `notification_subscriptions.dnd_end`
+      - `inventory_locations.site_id` and index `idx_inventory_site_active`
+      - `application_attachment_requirements` (if missing)
 3. Install backend deps:
 
 ```bash
@@ -76,7 +77,7 @@ Before starting backend in non-development environments, set secrets explicitly:
 4. Seed demo users:
 
 ```bash
-node scripts/seed-users.js
+node backend/scripts/seed-users.js
 ```
 
 5. Install frontend deps and run:
@@ -212,6 +213,10 @@ Optional credential overrides (defaults match `backend/scripts/seed-users.js`):
 Linux/macOS/Git Bash:
 
 ```bash
+# Recommended full integration-only run
+RUN_DB_INTEGRATION_TESTS=1 node --test --test-concurrency=1 integration_tests/db_integration.test.js
+
+# Optional combined run (safe): smoke file skips automatically when RUN_DB_INTEGRATION_TESTS=1
 RUN_DB_INTEGRATION_TESTS=1 node --test --test-concurrency=1 integration_tests/*.test.js
 ```
 
@@ -224,6 +229,11 @@ $env:DB_USER="root"
 $env:DB_PASSWORD="password"
 $env:DB_NAME="forgeops"
 $env:RUN_DB_INTEGRATION_TESTS="1"
+
+# Recommended full integration-only run
+node --test --test-concurrency=1 integration_tests/db_integration.test.js
+
+# Optional combined run (safe)
 node --test --test-concurrency=1 integration_tests/*.test.js
 ```
 

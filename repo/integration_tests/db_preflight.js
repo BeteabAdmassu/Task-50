@@ -25,6 +25,12 @@ function preflightError(reason, details = "") {
   );
 }
 
+export function extractTableName(row) {
+  if (!row || typeof row !== "object") return null;
+  const value = row.table_name ?? row.TABLE_NAME ?? null;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 export async function runDbPreflightChecks({ adminUsername, clerkUsername, verifyLogins }) {
   try {
     await pool.execute("SELECT 1 AS ok");
@@ -37,7 +43,7 @@ export async function runDbPreflightChecks({ adminUsername, clerkUsername, verif
      FROM information_schema.tables
      WHERE table_schema = DATABASE()`
   );
-  const present = new Set(tableRows.map((row) => row.table_name));
+  const present = new Set(tableRows.map(extractTableName).filter(Boolean));
   const missing = requiredTables.filter((name) => !present.has(name));
   if (missing.length) {
     throw preflightError("Required tables are missing.", `Missing: ${missing.join(", ")}`);

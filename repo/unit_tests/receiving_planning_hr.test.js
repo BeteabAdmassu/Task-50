@@ -106,8 +106,9 @@ test("closeReceipt rejects repeated close attempts after first success", async (
 });
 
 test("recommendPutaway skips incompatible mixed storage and picks valid bin", async () => {
-  pool.execute = async (sql) => {
+  pool.execute = async (sql, params) => {
     if (sql.includes("FROM inventory_locations")) {
+      assert.equal(params[0], 1);
       return [[
         {
           id: 1,
@@ -130,8 +131,49 @@ test("recommendPutaway skips incompatible mixed storage and picks valid bin", as
     throw new Error(`Unexpected SQL: ${sql}`);
   };
 
-  const result = await recommendPutaway({ sku: "SKU-1", lotNo: "LOT-NEW", quantity: 10 });
+  const result = await recommendPutaway(
+    { siteId: 1, sku: "SKU-1", lotNo: "LOT-NEW", quantity: 10 },
+    { id: 4, role: "CLERK", siteId: 1 }
+  );
   assert.equal(result.locationId, 2);
+
+  pool.execute = originalExecute;
+});
+
+test("recommendPutaway rejects cross-site access for non-admin actor", async () => {
+  await assert.rejects(
+    () =>
+      recommendPutaway(
+        { siteId: 2, sku: "SKU-1", lotNo: "LOT-NEW", quantity: 10 },
+        { id: 4, role: "CLERK", siteId: 1 }
+      ),
+    /Putaway recommendations are limited to your site/
+  );
+});
+
+test("recommendPutaway returns 409 when no same-site bin fits", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM inventory_locations")) {
+      return [[{
+        id: 1,
+        code: "A-01",
+        capacity_qty: 10,
+        occupied_qty: 10,
+        current_sku: null,
+        current_lot: null
+      }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await assert.rejects(
+    () =>
+      recommendPutaway(
+        { siteId: 1, sku: "SKU-1", lotNo: "LOT-NEW", quantity: 5 },
+        { id: 4, role: "CLERK", siteId: 1 }
+      ),
+    /No valid location found for putaway/
+  );
 
   pool.execute = originalExecute;
 });

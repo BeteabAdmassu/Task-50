@@ -9,6 +9,10 @@ import { config } from "../backend/src/config.js";
 
 const originalExecute = pool.execute;
 
+test("db config uses UTC timezone for MySQL session timestamps", () => {
+  assert.equal(config.db.timezone, "Z");
+});
+
 test("login locks account after fifth failed attempt", async () => {
   const hash = await bcrypt.hash("CorrectPassword123", 4);
   let updateParams = null;
@@ -24,7 +28,7 @@ test("login locks account after fifth failed attempt", async () => {
         locked_until: null,
         site_id: 1,
         department_id: 1,
-        sensitive_data_view: 0
+        has_sensitive_permission: 0
       }]];
     }
     if (sql.includes("SET failed_login_attempts = ?")) {
@@ -62,7 +66,7 @@ test("login returns token and resets failed attempts on success", async () => {
         locked_until: null,
         site_id: 1,
         department_id: 2,
-        sensitive_data_view: 0
+        has_sensitive_permission: 0
       }]];
     }
     if (sql.includes("failed_login_attempts = 0")) {
@@ -86,6 +90,42 @@ test("login returns token and resets failed attempts on success", async () => {
   assert.equal(resetAttempts, true);
   assert.equal(sessionInsert, true);
   assert.equal(auditInsert, true);
+  assert.equal(result.user.sensitiveDataView, false);
+
+  pool.execute = originalExecute;
+});
+
+test("login sensitiveDataView depends on permission mapping, not user flag", async () => {
+  const hash = await bcrypt.hash("CorrectPassword123", 4);
+
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM users WHERE username = ?")) {
+      return [[{
+        id: 42,
+        username: "hr1",
+        role: "HR",
+        password_hash: hash,
+        failed_login_attempts: 0,
+        locked_until: null,
+        site_id: 1,
+        department_id: 2,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("failed_login_attempts = 0")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO sessions")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const result = await login("hr1", "CorrectPassword123");
+  assert.equal(result.user.sensitiveDataView, true);
 
   pool.execute = originalExecute;
 });

@@ -69,7 +69,7 @@ router.post(
 );
 
 router.post("/putaway/recommend", requireAuth, requirePermission("PUTAWAY_READ"), async (ctx) => {
-  ctx.body = await recommendPutaway(ctx.request.body);
+  ctx.body = await recommendPutaway(ctx.request.body, ctx.state.user);
 });
 
 export default router;

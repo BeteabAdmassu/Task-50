@@ -46,12 +46,18 @@ const {
   receiptForm,
   receiptCloseForm,
   receiptCloseStatus,
+  receiptDocumentForm,
+  receiptDocuments,
+  receiptDocumentStatus,
   putawayInput,
   putawayResult,
   submitDock,
   submitReceipt,
   closeReceipt,
-  runPutaway
+  runPutaway,
+  onReceiptDocumentFileChange,
+  uploadReceiptDocument,
+  loadReceiptDocuments
 } = useReceivingWorkspace(auth);
 
 const {
@@ -149,6 +155,12 @@ async function logout() {
         :receipt-close-form="receiptCloseForm"
         :receipt-close-status="receiptCloseStatus"
         :on-close-receipt="closeReceipt"
+        :receipt-document-form="receiptDocumentForm"
+        :receipt-documents="receiptDocuments"
+        :receipt-document-status="receiptDocumentStatus"
+        :on-receipt-document-file-change="onReceiptDocumentFileChange"
+        :on-upload-receipt-document="uploadReceiptDocument"
+        :on-load-receipt-documents="loadReceiptDocuments"
       />
 
       <PutawayPanel

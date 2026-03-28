@@ -2,14 +2,19 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import app from "../backend/src/app.js";
-import { pool } from "../backend/src/db.js";
 import { runDbPreflightChecks } from "./db_preflight.js";
+import { integrationPoolLifecycle } from "./pool-lifecycle.js";
 
 const fullIntegrationEnabled = process.env.RUN_DB_INTEGRATION_TESTS === "1";
 const adminUsername = process.env.DB_INT_ADMIN_USER || "admin";
 const adminPassword = process.env.DB_INT_ADMIN_PASS || "AdminPassw0rd!";
 const clerkUsername = process.env.DB_INT_CLERK_USER || "clerk1";
 const clerkPassword = process.env.DB_INT_CLERK_PASS || "ClerkPassw0rd!";
+const releaseSuitePool = integrationPoolLifecycle.acquireSuite();
+
+after(async () => {
+  await releaseSuitePool();
+});
 
 async function startServer() {
   const server = createServer(app.callback());
@@ -34,10 +39,6 @@ async function login(baseUrl, username, password) {
 if (fullIntegrationEnabled) {
   test("DB smoke preflight covered by RUN_DB_INTEGRATION_TESTS=1", { skip: true }, () => {});
 } else {
-  after(async () => {
-    await pool.end();
-  });
-
   test("DB smoke preflight checks connectivity/schema/seeded-user logins", async () => {
     await runDbPreflightChecks({
       adminUsername,
