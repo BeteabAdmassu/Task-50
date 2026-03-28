@@ -38,12 +38,17 @@ export async function errorHandler(ctx, next) {
       return;
     }
     if (status >= 500) {
+      const correlationId =
+        ctx.state?.correlationId ||
+        (typeof ctx.get === "function" ? ctx.get("x-correlation-id") : null) ||
+        null;
       logger.error("system", "Unhandled system error", {
         path: ctx.path,
         method: ctx.method,
         status,
-        message: err.message,
-        name: err.name
+        errorType: err.name || "Error",
+        errorCode: err.code || null,
+        correlationId
       });
     }
   }

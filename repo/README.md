@@ -114,16 +114,19 @@ has the explicit `SENSITIVE_DATA_VIEW` permission.
 Linux/macOS/Git Bash:
 
 ```bash
-cd fullstack
+cd repo
 node --test --test-concurrency=1 unit_tests/*.test.js
 node --test --test-concurrency=1 API_tests/*.api.test.js
 node --test --test-concurrency=1 integration_tests/*.test.js
+cd frontend
+npm run test
+npm run build
 ```
 
 Windows PowerShell/CMD:
 
 ```powershell
-cd fullstack
+cd repo
 node --test --test-concurrency=1 unit_tests/*.test.js
 node --test --test-concurrency=1 API_tests/*.api.test.js
 node --test --test-concurrency=1 integration_tests/*.test.js
@@ -132,10 +135,48 @@ npm.cmd run build
 npm.cmd run test
 ```
 
-### DB-backed integration tests (skip-safe)
+### Cross-platform one-command runners
+
+Linux/macOS/Git Bash:
+
+```bash
+cd repo
+./run_tests.sh
+```
+
+Windows PowerShell:
+
+```powershell
+cd repo
+.\run_tests.ps1
+```
+
+### DB smoke tests (always-on default verification)
+
+- `integration_tests/db_smoke.test.js` runs whenever integration tests are executed.
+- It checks DB connectivity, required tables, and seeded-user login viability.
+- If prerequisites are missing, it fails with actionable setup steps.
+
+Run smoke profile:
+
+Linux/macOS/Git Bash:
+
+```bash
+cd repo
+node --test --test-concurrency=1 integration_tests/db_smoke.test.js
+```
+
+Windows PowerShell:
+
+```powershell
+cd repo
+node --test --test-concurrency=1 integration_tests/db_smoke.test.js
+```
+
+### Full DB integration tests (opt-in)
 
 Integration tests only run when `RUN_DB_INTEGRATION_TESTS=1` is set.
-If unset, they are skipped safely.
+If unset, `integration_tests/db_integration.test.js` is skipped while smoke tests still run.
 
 Prerequisites (required before enabling DB integration tests):
 - Apply schema: `backend/schema.sql`
@@ -151,25 +192,27 @@ Optional credential overrides (defaults match `backend/scripts/seed-users.js`):
 Linux/macOS/Git Bash:
 
 ```bash
+cd repo
 RUN_DB_INTEGRATION_TESTS=1 node --test --test-concurrency=1 integration_tests/*.test.js
 ```
 
 Windows PowerShell:
 
 ```powershell
+cd repo
 $env:DB_HOST="127.0.0.1"
 $env:DB_PORT="3306"
 $env:DB_USER="root"
 $env:DB_PASSWORD="password"
 $env:DB_NAME="forgeops"
 $env:RUN_DB_INTEGRATION_TESTS="1"
-cd fullstack
 node --test --test-concurrency=1 integration_tests/*.test.js
 ```
 
 Expected outcomes:
-- Without `RUN_DB_INTEGRATION_TESTS=1`: suite reports skipped DB integration tests.
-- With `RUN_DB_INTEGRATION_TESTS=1` and valid DB setup: integration tests pass.
+- Smoke run (`integration_tests/db_smoke.test.js`): passes when DB/setup are valid, otherwise fails with setup guidance.
+- Without `RUN_DB_INTEGRATION_TESTS=1`: full integration suite reports skipped tests.
+- With `RUN_DB_INTEGRATION_TESTS=1` and valid DB setup: full integration tests pass.
 
 Troubleshooting:
 - DB connection refused: verify `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` and that MySQL is running.
