@@ -1,14 +1,16 @@
+const sensitivePattern = /password|token|authorization|ssn|dob|date[_\s-]?of[_\s-]?birth|birth[_\s-]?date/i;
+
 function scrub(value) {
   if (value == null) return value;
   if (typeof value !== "string") return value;
-  if (/password|token|authorization|ssn/i.test(value)) return "[REDACTED]";
+  if (sensitivePattern.test(value)) return "[REDACTED]";
   return value;
 }
 
 function sanitizeMeta(meta = {}) {
   const clean = {};
   for (const [key, value] of Object.entries(meta)) {
-    if (/password|token|authorization|ssn/i.test(key)) {
+    if (sensitivePattern.test(key)) {
       clean[key] = "[REDACTED]";
       continue;
     }
@@ -22,7 +24,7 @@ function write(level, category, message, meta = {}) {
     ts: new Date().toISOString(),
     level,
     category,
-    message,
+    message: scrub(message),
     ...sanitizeMeta(meta)
   };
   const line = JSON.stringify(payload);

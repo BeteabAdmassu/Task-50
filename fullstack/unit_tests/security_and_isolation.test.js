@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createWorkOrder, logWorkOrderEvent, runMrp } from "../backend/src/services/planning-service.js";
 import { searchHub } from "../backend/src/services/search-service.js";
-import { publishEvent } from "../backend/src/services/notification-service.js";
+import { publishEvent, queueOfflineMessage } from "../backend/src/services/notification-service.js";
 import { optionalAuth } from "../backend/src/middleware/auth.js";
 import { pool } from "../backend/src/db.js";
 import { config } from "../backend/src/config.js";
@@ -88,6 +88,27 @@ test("planning logWorkOrderEvent denies cross-site work order", async () => {
         { id: 1, role: "PLANNER", siteId: 1 }
       ),
     /Cannot access work order for another site/
+  );
+
+  pool.execute = originalExecute;
+});
+
+test("planning logWorkOrderEvent rejects downtime without reason code", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM work_orders wo")) {
+      return [[{ id: 50, plan_id: 70, site_id: 1 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await assert.rejects(
+    () =>
+      logWorkOrderEvent(
+        50,
+        { eventType: "DOWNTIME", qty: 0, reasonCode: "", notes: null },
+        { id: 1, role: "PLANNER", siteId: 1 }
+      ),
+    /Downtime requires reason code/
   );
 
   pool.execute = originalExecute;
@@ -259,6 +280,48 @@ test("notification scheduling honors custom subscription DND window", async () =
   pool.execute = originalExecute;
 });
 
+test("queueOfflineMessage rejects unsupported connector channel", async () => {
+  await assert.rejects(
+    () =>
+      queueOfflineMessage(
+        {
+          channel: "FAX",
+          recipient: "ops@example.local",
+          subject: "bad",
+          body: "bad"
+        },
+        { id: 1 }
+      ),
+    /Unsupported connector channel/
+  );
+});
+
+test("notification scheduling supports same-day DND window", async () => {
+  const scheduled = [];
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM notification_subscriptions")) {
+      return [[{ user_id: 9, frequency: "IMMEDIATE", body_template: "x", dnd_start: "13:00", dnd_end: "17:00" }]];
+    }
+    if (sql.includes("INSERT INTO notifications") && sql.includes("deliver_after")) {
+      scheduled.push(params[3]);
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const now = new Date("2026-03-27T14:15:00");
+  await publishEvent("RECEIPT_ACK", {}, { id: 1 }, now);
+  const scheduledDate = new Date(scheduled[0]);
+  assert.equal(scheduledDate.getHours(), 17);
+  assert.equal(scheduledDate.getMinutes(), 0);
+  assert.ok(scheduledDate.getTime() > now.getTime());
+
+  pool.execute = originalExecute;
+});
+
 test("searchHub supports typo tolerance and source filter", async () => {
   let capturedParams = [];
   pool.execute = async (sql, params) => {
@@ -291,6 +354,85 @@ test("searchHub supports typo tolerance and source filter", async () => {
   });
   assert.equal(results.length, 1);
   assert.ok(capturedParams.includes("PORTAL"));
+
+  pool.execute = originalExecute;
+});
+
+test("searchHub enforces result cap boundary for empty query", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM search_documents")) {
+      const rows = Array.from({ length: 150 }, (_, index) => ({
+        entity_type: "candidate",
+        entity_id: String(index + 1),
+        title: `Candidate ${index + 1}`,
+        body: "body",
+        tags: "tag",
+        source: "PORTAL",
+        topic: "APPLICANT",
+        created_at: new Date(Date.now() - index * 1000)
+      }));
+      return [rows];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const results = await searchHub({
+    actor: { id: 1, role: "ADMIN", siteId: 1 },
+    query: "",
+    startDate: null,
+    endDate: null,
+    source: null,
+    topic: null,
+    entityType: null
+  });
+
+  assert.equal(results.length, 100);
+
+  pool.execute = originalExecute;
+});
+
+test("searchHub applies filter boundaries in generated query params", async () => {
+  let capturedSql = "";
+  let capturedParams = [];
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM search_documents")) {
+      capturedSql = sql;
+      capturedParams = params;
+      return [[{
+        entity_type: "candidate",
+        entity_id: "9",
+        title: "Applicant profile",
+        body: "Candidate onboarding",
+        tags: "applicant,hr",
+        source: "PORTAL",
+        topic: "APPLICANT",
+        created_at: new Date()
+      }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const results = await searchHub({
+    actor: { id: 1, role: "ADMIN", siteId: 1 },
+    query: "candidate",
+    startDate: "2026-01-01",
+    endDate: "2026-12-31",
+    source: "PORTAL",
+    topic: "APPLICANT",
+    entityType: "candidate"
+  });
+
+  assert.equal(results.length, 1);
+  assert.ok(capturedSql.includes("created_at >= ?"));
+  assert.ok(capturedSql.includes("created_at <= ?"));
+  assert.ok(capturedSql.includes("source = ?"));
+  assert.ok(capturedSql.includes("topic = ?"));
+  assert.ok(capturedSql.includes("entity_type = ?"));
+  assert.ok(capturedParams.includes("2026-01-01"));
+  assert.ok(capturedParams.includes("2026-12-31"));
+  assert.ok(capturedParams.includes("PORTAL"));
+  assert.ok(capturedParams.includes("APPLICANT"));
+  assert.ok(capturedParams.includes("candidate"));
 
   pool.execute = originalExecute;
 });

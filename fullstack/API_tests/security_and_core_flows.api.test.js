@@ -197,6 +197,90 @@ test("POST /api/hr/applications creates candidate and returns upload token", asy
   pool.getConnection = originalGetConnection;
 });
 
+test("POST /api/hr/applications repeated submission sets duplicateFlag", async () => {
+  const savedCandidates = [];
+  let nextId = 400;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM application_form_fields")) {
+      return [[{ field_key: "work_eligibility" }]];
+    }
+    if (sql.includes("FROM candidates WHERE full_name")) {
+      return [savedCandidates.filter((row) => row.full_name === params[0])];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO candidates")) {
+        nextId += 1;
+        savedCandidates.push({
+          id: nextId,
+          full_name: params[0],
+          dob_enc: params[3],
+          ssn_last4_enc: params[4]
+        });
+        return [{ insertId: nextId }];
+      }
+      if (sql.includes("INSERT INTO candidate_form_answers")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const { server, baseUrl } = await startServer();
+  const payload = {
+    fullName: "Repeat Candidate",
+    dob: "1994-11-02",
+    ssnLast4: "8899",
+    formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+  };
+
+  const firstRes = await fetch(`${baseUrl}/api/hr/applications`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const firstBody = await firstRes.json();
+  assert.equal(firstRes.status, 200);
+  assert.equal(firstBody.duplicateFlag, false);
+
+  const secondRes = await fetch(`${baseUrl}/api/hr/applications`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const secondBody = await secondRes.json();
+  assert.equal(secondRes.status, 200);
+  assert.equal(secondBody.duplicateFlag, true);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
+});
+
 test("GET /api/search returns 401 when unauthenticated", async () => {
   const { server, baseUrl } = await startServer();
   const response = await fetch(`${baseUrl}/api/search?q=test`);
@@ -324,6 +408,186 @@ test("POST /api/receiving/receipts/:id/close succeeds for same-site clerk", asyn
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;
+});
+
+test("POST /api/receiving/receipts/:id/close concurrent attempts allow only one success", async () => {
+  const token = jwt.sign({ sub: 44, sessionId: "sess-close-concurrency" }, config.jwtSecret, { expiresIn: 3600 });
+  let openConsumed = false;
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-close-concurrency",
+        user_id: 44,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
+    if (sql.includes("SELECT site_id FROM receipts")) return [[{ site_id: 1 }]];
+    if (sql.includes("FROM receipts WHERE id = ?")) {
+      if (!openConsumed) {
+        openConsumed = true;
+        return [[{ id: 777, site_id: 1, status: "OPEN", received_by: 44 }]];
+      }
+      return [[{ id: 777, site_id: 1, status: "CLOSED", received_by: 44 }]];
+    }
+    if (sql.includes("FROM receipt_discrepancies")) return [[]];
+    if (sql.includes("FROM receipt_lines rl")) return [[]];
+    if (sql.includes("UPDATE receipts SET status = 'CLOSED'")) return [{ affectedRows: 1 }];
+    if (sql.includes("INSERT INTO search_documents")) return [{ affectedRows: 1 }];
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const [resA, resB] = await Promise.all([
+    fetch(`${baseUrl}/api/receiving/receipts/777/close`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    }),
+    fetch(`${baseUrl}/api/receiving/receipts/777/close`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    })
+  ]);
+  const statuses = [resA.status, resB.status].sort((a, b) => a - b);
+  assert.deepEqual(statuses, [200, 400]);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/planning/work-orders/:id/events rejects downtime without reason code", async () => {
+  const token = jwt.sign({ sub: 45, sessionId: "sess-wo-downtime" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-wo-downtime",
+        user_id: 45,
+        last_activity_at: new Date(),
+        username: "planner1",
+        role: "PLANNER",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
+    if (sql.includes("FROM work_orders wo")) {
+      return [[{ id: 900, plan_id: 1, site_id: 1 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/planning/work-orders/900/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ eventType: "DOWNTIME", qty: 0, reasonCode: "", notes: "line stop" })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(body.error, /Downtime requires reason code/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/planning/adjustments/:id/approve concurrent attempts allow only one success", async () => {
+  const token = jwt.sign({ sub: 46, sessionId: "sess-adjust-concurrency" }, config.jwtSecret, { expiresIn: 3600 });
+  let pendingConsumed = false;
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-adjust-concurrency",
+        user_id: 46,
+        last_activity_at: new Date(),
+        username: "supervisor1",
+        role: "PLANNER_SUPERVISOR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM role_permissions rp")) return [[{ 1: 1 }]];
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql) {
+      if (sql.includes("FROM plan_adjustments WHERE id")) {
+        if (!pendingConsumed) {
+          pendingConsumed = true;
+          return [[{
+            id: 88,
+            plan_id: 21,
+            before_snapshot: JSON.stringify({ status: "DRAFT" }),
+            after_snapshot: JSON.stringify({ status: "APPROVED", weeks: [] }),
+            status: "PENDING"
+          }]];
+        }
+        return [[{
+          id: 88,
+          plan_id: 21,
+          before_snapshot: JSON.stringify({ status: "DRAFT" }),
+          after_snapshot: JSON.stringify({ status: "APPROVED", weeks: [] }),
+          status: "APPROVED"
+        }]];
+      }
+      if (sql.includes("FROM production_plans") && sql.includes("FOR UPDATE")) {
+        return [[{ id: 21, site_id: 1, plan_name: "Plan", start_week: "2026-03-30", status: "DRAFT" }]];
+      }
+      if (sql.includes("UPDATE production_plans")) return [{ affectedRows: 1 }];
+      if (sql.includes("UPDATE plan_adjustments")) return [{ affectedRows: 1 }];
+      if (sql.includes("SELECT id, site_id, plan_name, start_week, status") && !sql.includes("FOR UPDATE")) {
+        return [[{ id: 21, site_id: 1, plan_name: "Plan", start_week: "2026-03-30", status: "APPROVED" }]];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+      if (sql.includes("INSERT INTO search_documents")) return [{ affectedRows: 1 }];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const { server, baseUrl } = await startServer();
+  const [resA, resB] = await Promise.all([
+    fetch(`${baseUrl}/api/planning/adjustments/88/approve`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    }),
+    fetch(`${baseUrl}/api/planning/adjustments/88/approve`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    })
+  ]);
+  const statuses = [resA.status, resB.status].sort((a, b) => a - b);
+  assert.deepEqual(statuses, [200, 409]);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
 });
 
 test("GET /api/dashboard scopes planner widgets to own site", async () => {
@@ -457,6 +721,50 @@ test("POST /api/notifications/offline-queue creates queued connector export", as
   pool.execute = originalExecute;
 });
 
+test("POST /api/notifications/offline-queue rejects unsupported channel", async () => {
+  const token = jwt.sign({ sub: 37, sessionId: "sess-offline-unsupported" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-offline-unsupported",
+        user_id: 37,
+        last_activity_at: new Date(),
+        username: "admin",
+        role: "ADMIN",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/offline-queue`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      channel: "FAX",
+      recipient: "ops@example.local",
+      subject: "Unsupported",
+      body: "payload"
+    })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(body.error, /Unsupported connector channel/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
 test("POST /api/notifications/offline-queue/retry processes retries and statuses", async () => {
   const token = jwt.sign({ sub: 33, sessionId: "sess-offline-retry" }, config.jwtSecret, { expiresIn: 3600 });
   const retriedIds = [];
@@ -479,12 +787,12 @@ test("POST /api/notifications/offline-queue/retry processes retries and statuses
     if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
     if (sql.includes("FROM message_queue WHERE status IN ('FAILED', 'QUEUED')")) {
       return [[
-        { id: "msg-1", retry_count: 0 },
-        { id: "msg-2", retry_count: 2 }
+        { id: "msg-1", channel: "EMAIL", retry_count: 0 },
+        { id: "msg-2", channel: "SMS", retry_count: 2 }
       ]];
     }
     if (sql.includes("UPDATE message_queue")) {
-      retriedIds.push(params[0]);
+      retriedIds.push(params[2]);
       return [{ affectedRows: 1 }];
     }
     throw new Error(`Unexpected SQL: ${sql}`);

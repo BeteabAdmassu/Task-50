@@ -116,7 +116,8 @@ Linux/macOS/Git Bash:
 ```bash
 cd fullstack
 node --test --test-concurrency=1 unit_tests/*.test.js
-node --test --test-concurrency=1 API_tests/*.test.js
+node --test --test-concurrency=1 API_tests/*.api.test.js
+node --test --test-concurrency=1 integration_tests/*.test.js
 ```
 
 Windows PowerShell/CMD:
@@ -124,7 +125,33 @@ Windows PowerShell/CMD:
 ```powershell
 cd fullstack
 node --test --test-concurrency=1 unit_tests/*.test.js
-node --test --test-concurrency=1 API_tests/*.test.js
+node --test --test-concurrency=1 API_tests/*.api.test.js
+node --test --test-concurrency=1 integration_tests/*.test.js
 cd frontend
 npm.cmd run build
+npm.cmd run test
+```
+
+### DB-backed integration tests (skip-safe)
+
+Integration tests only run when `RUN_DB_INTEGRATION_TESTS=1` is set.
+If unset, they are skipped safely.
+
+Optional credential overrides (defaults match `backend/scripts/seed-users.js`):
+- `DB_INT_ADMIN_USER` (default `admin`)
+- `DB_INT_ADMIN_PASS` (default `AdminPassw0rd!`)
+- `DB_INT_CLERK_USER` (default `clerk1`)
+- `DB_INT_CLERK_PASS` (default `ClerkPassw0rd!`)
+
+Linux/macOS/Git Bash:
+
+```bash
+RUN_DB_INTEGRATION_TESTS=1 node --test --test-concurrency=1 integration_tests/*.test.js
+```
+
+Windows PowerShell:
+
+```powershell
+$env:RUN_DB_INTEGRATION_TESTS="1"
+node --test --test-concurrency=1 integration_tests/*.test.js
 ```

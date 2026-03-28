@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "pinia": "^2.2.4",
@@ -14,7 +17,10 @@
     "vue-router": "^4.4.5"
   },
   "devDependencies": {
+    "@vue/test-utils": "^2.4.6",
     "@vitejs/plugin-vue": "^5.1.4",
-    "vite": "^5.4.8"
+    "jsdom": "^25.0.1",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.8"
   }
 }

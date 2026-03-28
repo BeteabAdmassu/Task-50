@@ -67,6 +67,82 @@ test("createCandidateApplication flags duplicate when name + dob + ssn4 match", 
   pool.getConnection = originalGetConnection;
 });
 
+test("createCandidateApplication marks repeated submissions as duplicate", async () => {
+  const storedCandidates = [];
+  let nextId = 100;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM application_form_fields")) {
+      return [[{ field_key: "work_eligibility" }]];
+    }
+    if (sql.includes("FROM candidates WHERE full_name")) {
+      return [storedCandidates.filter((row) => row.full_name === params[0])];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO candidates")) {
+        nextId += 1;
+        storedCandidates.push({
+          id: nextId,
+          full_name: params[0],
+          dob_enc: params[3],
+          ssn_last4_enc: params[4]
+        });
+        return [{ insertId: nextId }];
+      }
+      if (sql.includes("INSERT INTO candidate_form_answers")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const first = await createCandidateApplication(
+    {
+      fullName: "Taylor Repeat",
+      dob: "1994-07-09",
+      ssnLast4: "7788",
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    },
+    null
+  );
+  const second = await createCandidateApplication(
+    {
+      fullName: "Taylor Repeat",
+      dob: "1994-07-09",
+      ssnLast4: "7788",
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    },
+    null
+  );
+
+  assert.equal(first.duplicateFlag, false);
+  assert.equal(second.duplicateFlag, true);
+
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
+});
+
 test("attachCandidateFile rejects invalid MIME type", async () => {
   await assert.rejects(
     () =>
@@ -132,4 +208,24 @@ test("schema contains immutable audit triggers for update and delete", async () 
   assert.match(schemaSql, /CREATE TRIGGER trg_audit_logs_no_update/);
   assert.match(schemaSql, /CREATE TRIGGER trg_audit_logs_no_delete/);
   assert.match(schemaSql, /audit_logs is immutable/);
+});
+
+test("audit immutability runtime rejects UPDATE and DELETE attempts", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("UPDATE audit_logs") || sql.includes("DELETE FROM audit_logs")) {
+      throw new Error("audit_logs is immutable");
+    }
+    return [{ affectedRows: 1 }];
+  };
+
+  await assert.rejects(
+    () => pool.execute("UPDATE audit_logs SET action = 'X' WHERE id = 1"),
+    /audit_logs is immutable/
+  );
+  await assert.rejects(
+    () => pool.execute("DELETE FROM audit_logs WHERE id = 1"),
+    /audit_logs is immutable/
+  );
+
+  pool.execute = originalExecute;
 });

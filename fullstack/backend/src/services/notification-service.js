@@ -6,6 +6,7 @@ import { pool } from "../db.js";
 import { config } from "../config.js";
 import { AppError } from "../utils/errors.js";
 import { writeAudit } from "./audit-service.js";
+import { getConnectorAdapter } from "./notification-connectors/adapter-registry.js";
 
 function isValidHhMm(value) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
@@ -24,14 +25,24 @@ function resolveDndWindow(subscription) {
 }
 
 function inDoNotDisturb(window, now = dayjs()) {
-  const hhmm = now.format("HH:mm");
-  return hhmm >= window.start || hhmm < window.end;
+  const nowMinutes = toMinutes(now.format("HH:mm"));
+  const startMinutes = toMinutes(window.start);
+  const endMinutes = toMinutes(window.end);
+
+  if (startMinutes === endMinutes) return true;
+  if (startMinutes > endMinutes) {
+    return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+  }
+  return nowMinutes >= startMinutes && nowMinutes < endMinutes;
 }
 
 function nextDndRelease(window, now = dayjs()) {
-  const hhmm = now.format("HH:mm");
+  const nowMinutes = toMinutes(now.format("HH:mm"));
+  const startMinutes = toMinutes(window.start);
+  const endMinutes = toMinutes(window.end);
   const [endHour, endMinute] = window.end.split(":").map(Number);
-  if (hhmm >= window.start) {
+
+  if (startMinutes === endMinutes) {
     return now
       .add(1, "day")
       .hour(endHour)
@@ -40,7 +51,36 @@ function nextDndRelease(window, now = dayjs()) {
       .millisecond(0)
       .toDate();
   }
-  return now.hour(endHour).minute(endMinute).second(0).millisecond(0).toDate();
+
+  if (startMinutes > endMinutes) {
+    if (nowMinutes >= startMinutes) {
+      return now
+        .add(1, "day")
+        .hour(endHour)
+        .minute(endMinute)
+        .second(0)
+        .millisecond(0)
+        .toDate();
+    }
+    return now.hour(endHour).minute(endMinute).second(0).millisecond(0).toDate();
+  }
+
+  if (nowMinutes < endMinutes) {
+    return now.hour(endHour).minute(endMinute).second(0).millisecond(0).toDate();
+  }
+
+  return now
+    .add(1, "day")
+    .hour(endHour)
+    .minute(endMinute)
+    .second(0)
+    .millisecond(0)
+    .toDate();
+}
+
+function toMinutes(hhmm) {
+  const [hour, minute] = hhmm.split(":").map(Number);
+  return hour * 60 + minute;
 }
 
 function nextDaily6pm(now = dayjs()) {
@@ -218,16 +258,19 @@ function renderTemplate(template, payload) {
 }
 
 export async function queueOfflineMessage(input, actor) {
+  const adapter = getConnectorAdapter(input.channel);
+  adapter.validate(input);
+
   await fs.mkdir(config.exportDir, { recursive: true });
   const id = uuidv4();
+  const channel = String(input.channel).toUpperCase();
   const fileName = `${dayjs().format("YYYYMMDD-HHmmss")}-${id}.json`;
   const filePath = path.join(config.exportDir, fileName);
+  const payload = adapter.buildExportPayload(input);
   const content = {
     id,
-    channel: input.channel,
-    recipient: input.recipient,
-    subject: input.subject,
-    body: input.body,
+    channel,
+    ...payload,
     exportedAt: new Date().toISOString(),
     status: "QUEUED"
   };
@@ -236,7 +279,7 @@ export async function queueOfflineMessage(input, actor) {
     `INSERT INTO message_queue
       (id, channel, recipient, subject, body, status, export_file)
      VALUES (?, ?, ?, ?, ?, 'QUEUED', ?)`,
-    [id, input.channel, input.recipient, input.subject, input.body, filePath]
+    [id, channel, input.recipient, input.subject, input.body, filePath]
   );
   
   await writeAudit({
@@ -246,7 +289,7 @@ export async function queueOfflineMessage(input, actor) {
     entityId: id,
     beforeValue: null,
     afterValue: {
-      channel: input.channel,
+      channel,
       recipient: input.recipient,
       subject: input.subject,
       status: "QUEUED"
@@ -258,18 +301,18 @@ export async function queueOfflineMessage(input, actor) {
 
 export async function retryFailedMessages(actor = null) {
   const [rows] = await pool.execute(
-    `SELECT id, retry_count
+    `SELECT id, channel, retry_count
      FROM message_queue WHERE status IN ('FAILED', 'QUEUED')`
   );
   for (const row of rows) {
-    const nextRetry = Number(row.retry_count) + 1;
-    const nextStatus = nextRetry >= 3 ? "FAILED" : "QUEUED";
+    const adapter = getConnectorAdapter(row.channel);
+    const policy = adapter.retryPolicy(Number(row.retry_count));
     await pool.execute(
       `UPDATE message_queue
-       SET retry_count = retry_count + 1,
-            status = CASE WHEN retry_count + 1 >= 3 THEN 'FAILED' ELSE 'QUEUED' END
+       SET retry_count = ?,
+            status = ?
        WHERE id = ?`,
-      [row.id]
+      [policy.nextRetryCount, policy.status, row.id]
     );
     await writeAudit({
       actorUserId: actor?.id || null,
@@ -277,7 +320,7 @@ export async function retryFailedMessages(actor = null) {
       entityType: "message_queue",
       entityId: row.id,
       beforeValue: { retryCount: Number(row.retry_count) },
-      afterValue: { retryCount: nextRetry, status: nextStatus }
+      afterValue: { retryCount: policy.nextRetryCount, status: policy.status }
     });
   }
   return { processed: rows.length };

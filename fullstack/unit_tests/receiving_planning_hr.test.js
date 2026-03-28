@@ -70,6 +70,41 @@ test("closeReceipt rejects qty mismatches without valid discrepancy record", asy
   pool.execute = originalExecute;
 });
 
+test("closeReceipt rejects repeated close attempts after first success", async () => {
+  let receiptStatus = "OPEN";
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM receipts WHERE id")) {
+      return [[{ id: 9, site_id: 1, status: receiptStatus, received_by: 4 }]];
+    }
+    if (sql.includes("FROM receipt_discrepancies")) {
+      return [[]];
+    }
+    if (sql.includes("FROM receipt_lines rl")) {
+      return [[]];
+    }
+    if (sql.includes("UPDATE receipts SET status = 'CLOSED'")) {
+      receiptStatus = "CLOSED";
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("INSERT INTO search_documents")) {
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await closeReceipt(9, { id: 4, role: "CLERK", siteId: 1 });
+
+  await assert.rejects(
+    () => closeReceipt(9, { id: 4, role: "CLERK", siteId: 1 }),
+    /Receipt is not open/
+  );
+
+  pool.execute = originalExecute;
+});
+
 test("recommendPutaway skips incompatible mixed storage and picks valid bin", async () => {
   pool.execute = async (sql) => {
     if (sql.includes("FROM inventory_locations")) {
@@ -156,6 +191,63 @@ test("approvePlanAdjustment applies after_snapshot updates and line upserts", as
   assert.equal(result.ok, true);
   assert.equal(updatedPlan, true);
   assert.equal(lineUpserts, 1);
+
+  pool.getConnection = originalGetConnection;
+});
+
+test("approvePlanAdjustment rejects repeated approval after first success", async () => {
+  let adjustmentStatus = "PENDING";
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql) {
+      if (sql.includes("FROM plan_adjustments WHERE id")) {
+        return [[{
+          id: 5,
+          plan_id: 21,
+          before_snapshot: JSON.stringify({ planName: "Old Plan" }),
+          after_snapshot: JSON.stringify({
+            planName: "New Plan",
+            status: "APPROVED",
+            weeks: []
+          }),
+          status: adjustmentStatus
+        }]];
+      }
+      if (sql.includes("FROM production_plans") && sql.includes("FOR UPDATE")) {
+        return [[{ id: 21, site_id: 1, plan_name: "Old Plan", start_week: "2026-03-30", status: "DRAFT" }]];
+      }
+      if (sql.includes("UPDATE production_plans")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("UPDATE plan_adjustments")) {
+        adjustmentStatus = "APPROVED";
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      if (sql.includes("SELECT id, site_id, plan_name, start_week, status") && !sql.includes("FOR UPDATE")) {
+        return [[{ id: 21, site_id: 1, plan_name: "New Plan", start_week: "2026-03-30", status: "APPROVED" }]];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+
+  pool.getConnection = async () => conn;
+
+  const first = await approvePlanAdjustment(5, { id: 2, role: "PLANNER_SUPERVISOR", siteId: 1 });
+  assert.equal(first.ok, true);
+
+  await assert.rejects(
+    () => approvePlanAdjustment(5, { id: 2, role: "PLANNER_SUPERVISOR", siteId: 1 }),
+    /Adjustment is not pending/
+  );
 
   pool.getConnection = originalGetConnection;
 });

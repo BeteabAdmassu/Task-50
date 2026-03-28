@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import bcrypt from "../backend/node_modules/bcryptjs/index.js";
 import jwt from "../backend/node_modules/jsonwebtoken/index.js";
-import { login } from "../backend/src/services/auth-service.js";
+import { createUser, login } from "../backend/src/services/auth-service.js";
 import { optionalAuth, requirePermission } from "../backend/src/middleware/auth.js";
 import { pool } from "../backend/src/db.js";
 import { config } from "../backend/src/config.js";
@@ -146,5 +146,94 @@ test("requirePermission blocks user without mapped permission", async () => {
 
   await assert.rejects(() => middleware(ctx, async () => {}), /Permission missing: RECEIPT_CLOSE/);
 
+  pool.execute = originalExecute;
+});
+
+test("createUser rejects password shorter than 12 chars", async () => {
+  await assert.rejects(
+    () =>
+      createUser(
+        {
+          username: "new-user",
+          role: "CLERK",
+          password: "short1"
+        },
+        1
+      ),
+    /Password too short/
+  );
+});
+
+test("createUser hashes password and never stores plaintext", async () => {
+  const originalHash = bcrypt.hash;
+  let receivedHashInput = null;
+  let storedPasswordHash = null;
+
+  bcrypt.hash = async (value, rounds) => {
+    receivedHashInput = { value, rounds };
+    return "$2a$12$hashedPasswordValue";
+  };
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO users")) {
+      storedPasswordHash = params[2];
+      return [{ insertId: 55 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const result = await createUser(
+    {
+      username: "secure-user",
+      role: "HR",
+      password: "VeryLongPassword123",
+      siteId: 1,
+      departmentId: 1,
+      sensitiveDataView: false
+    },
+    99
+  );
+
+  assert.equal(result.id, 55);
+  assert.deepEqual(receivedHashInput, { value: "VeryLongPassword123", rounds: 12 });
+  assert.equal(storedPasswordHash, "$2a$12$hashedPasswordValue");
+  assert.notEqual(storedPasswordHash, "VeryLongPassword123");
+
+  bcrypt.hash = originalHash;
+  pool.execute = originalExecute;
+});
+
+test("createUser writes audit log on success", async () => {
+  const originalHash = bcrypt.hash;
+  let auditInsertSeen = false;
+
+  bcrypt.hash = async () => "$2a$12$anotherHashedValue";
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO users")) {
+      return [{ insertId: 56 }];
+    }
+    if (sql.includes("INSERT INTO audit_logs")) {
+      auditInsertSeen = true;
+      return [{ insertId: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await createUser(
+    {
+      username: "audited-user",
+      role: "PLANNER",
+      password: "AnotherStrongPass123"
+    },
+    100
+  );
+
+  assert.equal(auditInsertSeen, true);
+
+  bcrypt.hash = originalHash;
   pool.execute = originalExecute;
 });

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { useAuthStore } from "../stores/auth.js";
-import { apiFormRequest, apiRequest } from "../api.js";
+import { apiRequest } from "../api.js";
 import WorkspaceSidebar from "../components/workspace/WorkspaceSidebar.vue";
 import OverviewPanel from "../components/workspace/OverviewPanel.vue";
 import DockPanel from "../components/workspace/DockPanel.vue";
@@ -17,6 +17,12 @@ import RulesPanel from "../components/workspace/RulesPanel.vue";
 import NotificationsPanel from "../components/workspace/NotificationsPanel.vue";
 import SearchPanel from "../components/workspace/SearchPanel.vue";
 import AuditPanel from "../components/workspace/AuditPanel.vue";
+import { useReceivingWorkspace } from "../composables/useReceivingWorkspace.js";
+import { usePlanningWorkspace } from "../composables/usePlanningWorkspace.js";
+import { useHrWorkspace } from "../composables/useHrWorkspace.js";
+import { useNotificationsWorkspace } from "../composables/useNotificationsWorkspace.js";
+import { useSearchWorkspace } from "../composables/useSearchWorkspace.js";
+import { useAuditWorkspace } from "../composables/useAuditWorkspace.js";
 
 const auth = useAuthStore();
 const dashboard = ref({ widgets: {} });
@@ -35,237 +41,77 @@ const panelsByRole = {
 
 const availablePanels = computed(() => panelsByRole[auth.role] || ["overview"]);
 
-const dockForm = ref({ siteId: auth.user?.siteId || "", poNumber: "", startAt: "", endAt: "", notes: "" });
-const receiptForm = ref({ siteId: auth.user?.siteId || "", poNumber: "", lines: [{ poLineNo: "1", sku: "", lotNo: "", qtyExpected: 0, qtyReceived: 0, discrepancyType: "", dispositionNote: "" }] });
-const receiptCloseForm = ref({ receiptId: "" });
-const receiptCloseStatus = ref("");
-const putawayInput = ref({ sku: "", lotNo: "", quantity: 0 });
-const putawayResult = ref(null);
-const mpsForm = ref({ siteId: auth.user?.siteId || 1, planName: "12 Week Plan", startWeek: "", weeks: Array.from({ length: 12 }, (_, i) => ({ weekIndex: i + 1, itemCode: "", plannedQty: 0 })) });
-const mrpPlanId = ref("");
-const mrpOutput = ref([]);
-const workOrderForm = ref({ planId: "", itemCode: "", qtyTarget: 0, scheduledStart: "", scheduledEnd: "" });
-const workOrderEventForm = ref({ workOrderId: "", eventType: "PRODUCTION", qty: 0, reasonCode: "", notes: "" });
-const workOrderEventStatus = ref("");
-const adjustmentForm = ref({ planId: "", reasonCode: "", before: "{}", after: "{}" });
-const adjustmentApproveForm = ref({ adjustmentId: "" });
-const adjustmentApproveStatus = ref("");
-const candidateForm = ref({ fullName: "", email: "", phone: "", dob: "", ssnLast4: "", source: "PORTAL", formData: [] });
-const appFormFields = ref([]);
-const candidateAttachment = ref(null);
-const lastCandidateId = ref("");
-const candidateUploadStatus = ref("");
-const scoreForm = ref({ candidateId: "", ruleVersionId: "", courseworkScores: [0], midtermScores: [0], finalScores: [0], creditHours: 3 });
-const notifForm = ref({ topic: "RECEIPT_ACK", frequency: "IMMEDIATE", dndStart: "21:00", dndEnd: "07:00" });
-const notificationQuery = ref({ status: "", eventType: "", page: 1, pageSize: 20 });
-const notificationPage = ref({ page: 1, pageSize: 20, total: 0, data: [] });
-const notificationStatus = ref("");
-const searchForm = ref({ q: "", source: "", topic: "", entityType: "", startDate: "", endDate: "" });
-const searchResults = ref([]);
-const auditQuery = ref({ action: "", entityType: "", actorUserId: "", page: 1, pageSize: 20 });
-const auditPage = ref({ page: 1, pageSize: 20, total: 0, data: [] });
-const auditStatus = ref("");
-const interviewerReviewForm = ref({ candidateId: "" });
-const interviewerReviewResult = ref(null);
-const interviewerReviewStatus = ref("");
+const {
+  dockForm,
+  receiptForm,
+  receiptCloseForm,
+  receiptCloseStatus,
+  putawayInput,
+  putawayResult,
+  submitDock,
+  submitReceipt,
+  closeReceipt,
+  runPutaway
+} = useReceivingWorkspace(auth);
+
+const {
+  mpsForm,
+  mrpPlanId,
+  mrpOutput,
+  workOrderForm,
+  workOrderEventForm,
+  workOrderEventStatus,
+  adjustmentForm,
+  adjustmentApproveForm,
+  adjustmentApproveStatus,
+  canApproveAdjustments,
+  saveMps,
+  runMrp,
+  createWorkOrder,
+  logWorkOrderEvent,
+  requestAdjustment,
+  approveAdjustment
+} = usePlanningWorkspace(auth);
+
+const {
+  candidateForm,
+  appFormFields,
+  lastCandidateId,
+  candidateUploadStatus,
+  scoreForm,
+  interviewerReviewForm,
+  interviewerReviewResult,
+  interviewerReviewStatus,
+  setApplicationFormFields,
+  submitCandidate,
+  getFormEntry,
+  onCandidateFileChange,
+  computeScore,
+  loadInterviewerCandidate
+} = useHrWorkspace();
+
+const {
+  notifForm,
+  notificationQuery,
+  notificationPage,
+  notificationStatus,
+  subscribeNotifications,
+  loadNotifications
+} = useNotificationsWorkspace();
+
+const { searchForm, searchResults, searchAll } = useSearchWorkspace();
+
+const { auditQuery, auditPage, auditStatus, loadAuditLogs } = useAuditWorkspace();
 
 onMounted(loadDashboard);
 
 async function loadDashboard() {
   try {
     dashboard.value = await apiRequest("/dashboard");
-    appFormFields.value = await apiRequest("/hr/forms/application");
-    candidateForm.value.formData = appFormFields.value.map((field) => ({ fieldKey: field.field_key, fieldValue: "" }));
+    const fields = await apiRequest("/hr/forms/application");
+    setApplicationFormFields(fields);
   } catch (err) {
     error.value = err.message;
-  }
-}
-
-async function submitDock() {
-  await apiRequest("/receiving/dock-appointments", { method: "POST", body: JSON.stringify(dockForm.value) });
-}
-
-async function submitReceipt() {
-  const payload = {
-    ...receiptForm.value,
-    lines: receiptForm.value.lines.map((line) => ({
-      ...line,
-      discrepancyType: line.discrepancyType || null,
-      dispositionNote: line.dispositionNote || null,
-      qtyDelta: Number(line.qtyReceived) - Number(line.qtyExpected)
-    }))
-  };
-  await apiRequest("/receiving/receipts", { method: "POST", body: JSON.stringify(payload) });
-}
-
-async function closeReceipt() {
-  receiptCloseStatus.value = "";
-  if (!receiptCloseForm.value.receiptId) {
-    receiptCloseStatus.value = "Receipt ID is required.";
-    return;
-  }
-  try {
-    await apiRequest(`/receiving/receipts/${receiptCloseForm.value.receiptId}/close`, {
-      method: "POST"
-    });
-    receiptCloseStatus.value = "Receipt closed successfully.";
-  } catch (err) {
-    receiptCloseStatus.value = `Failed to close receipt: ${err.message}`;
-  }
-}
-
-async function runPutaway() {
-  putawayResult.value = await apiRequest("/receiving/putaway/recommend", { method: "POST", body: JSON.stringify(putawayInput.value) });
-}
-
-async function saveMps() {
-  await apiRequest("/planning/mps", { method: "POST", body: JSON.stringify(mpsForm.value) });
-}
-
-async function runMrp() {
-  mrpOutput.value = await apiRequest(`/planning/mps/${mrpPlanId.value}/mrp`);
-}
-
-async function createWorkOrder() {
-  await apiRequest("/planning/work-orders", { method: "POST", body: JSON.stringify(workOrderForm.value) });
-}
-
-async function logWorkOrderEvent() {
-  workOrderEventStatus.value = "";
-  if (workOrderEventForm.value.eventType === "DOWNTIME" && !workOrderEventForm.value.reasonCode.trim()) {
-    workOrderEventStatus.value = "Downtime reason code is required.";
-    return;
-  }
-
-  await apiRequest(`/planning/work-orders/${workOrderEventForm.value.workOrderId}/events`, {
-    method: "POST",
-    body: JSON.stringify({
-      eventType: workOrderEventForm.value.eventType,
-      qty: Number(workOrderEventForm.value.qty) || 0,
-      reasonCode: workOrderEventForm.value.reasonCode || null,
-      notes: workOrderEventForm.value.notes || null
-    })
-  });
-  workOrderEventStatus.value = "Work order event logged.";
-}
-
-async function requestAdjustment() {
-  const payload = {
-    ...adjustmentForm.value,
-    before: JSON.parse(adjustmentForm.value.before || "{}"),
-    after: JSON.parse(adjustmentForm.value.after || "{}")
-  };
-  await apiRequest(`/planning/plans/${adjustmentForm.value.planId}/adjustments`, {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
-
-const canApproveAdjustments = computed(() => ["ADMIN", "PLANNER_SUPERVISOR"].includes(auth.role));
-
-async function approveAdjustment() {
-  adjustmentApproveStatus.value = "";
-  if (!adjustmentApproveForm.value.adjustmentId) {
-    adjustmentApproveStatus.value = "Adjustment ID is required.";
-    return;
-  }
-  try {
-    await apiRequest(`/planning/adjustments/${adjustmentApproveForm.value.adjustmentId}/approve`, {
-      method: "POST"
-    });
-    adjustmentApproveStatus.value = "Adjustment approved.";
-  } catch (err) {
-    adjustmentApproveStatus.value = `Approval failed: ${err.message}`;
-  }
-}
-
-async function submitCandidate() {
-  candidateUploadStatus.value = "";
-  try {
-    const created = await apiRequest("/hr/applications", { method: "POST", body: JSON.stringify(candidateForm.value) });
-    lastCandidateId.value = created.id;
-    if (!candidateAttachment.value) {
-      candidateUploadStatus.value = "Application submitted. No attachment uploaded.";
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", candidateAttachment.value);
-    const headers = {};
-    if (created.uploadToken) headers["x-candidate-upload-token"] = created.uploadToken;
-
-    try {
-      await apiFormRequest(`/hr/applications/${created.id}/attachments`, formData, { headers });
-      candidateUploadStatus.value = "Application and attachment uploaded successfully.";
-    } catch (uploadErr) {
-      candidateUploadStatus.value = `Application submitted, but attachment upload failed: ${uploadErr.message}`;
-    }
-  } catch (err) {
-    candidateUploadStatus.value = `Application submission failed: ${err.message}`;
-  }
-}
-
-function getFormEntry(fieldKey) {
-  const found = candidateForm.value.formData.find((item) => item.fieldKey === fieldKey);
-  if (found) return found;
-  const created = { fieldKey, fieldValue: "" };
-  candidateForm.value.formData.push(created);
-  return created;
-}
-
-function onCandidateFileChange(event) {
-  candidateAttachment.value = event.target.files?.[0] || null;
-}
-
-async function subscribeNotifications() {
-  await apiRequest("/notifications/subscriptions", { method: "POST", body: JSON.stringify(notifForm.value) });
-}
-
-async function loadNotifications() {
-  notificationStatus.value = "";
-  try {
-    const params = new URLSearchParams(notificationQuery.value).toString();
-    notificationPage.value = await apiRequest(`/notifications?${params}`);
-    notificationStatus.value = "Notifications loaded.";
-  } catch (err) {
-    notificationStatus.value = `Failed to load notifications: ${err.message}`;
-  }
-}
-
-async function loadAuditLogs() {
-  auditStatus.value = "";
-  try {
-    const params = new URLSearchParams(auditQuery.value).toString();
-    auditPage.value = await apiRequest(`/audit?${params}`);
-    auditStatus.value = "Audit logs loaded.";
-  } catch (err) {
-    auditStatus.value = `Failed to load audit logs: ${err.message}`;
-  }
-}
-
-async function computeScore() {
-  await apiRequest("/rules/score", { method: "POST", body: JSON.stringify(scoreForm.value) });
-}
-
-async function searchAll() {
-  const params = new URLSearchParams(searchForm.value).toString();
-  searchResults.value = await apiRequest(`/search?${params}`);
-}
-
-async function loadInterviewerCandidate() {
-  interviewerReviewStatus.value = "";
-  interviewerReviewResult.value = null;
-  if (!interviewerReviewForm.value.candidateId) {
-    interviewerReviewStatus.value = "Candidate ID is required.";
-    return;
-  }
-  try {
-    interviewerReviewResult.value = await apiRequest(
-      `/hr/candidates/${interviewerReviewForm.value.candidateId}`
-    );
-    interviewerReviewStatus.value = "Candidate loaded.";
-  } catch (err) {
-    interviewerReviewStatus.value = `Unable to load candidate: ${err.message}`;
   }
 }
 
