@@ -6,7 +6,7 @@ export function useReceivingWorkspace(auth) {
   const receiptForm = ref({
     siteId: auth.user?.siteId || "",
     poNumber: "",
-    lines: [{ poLineNo: "1", sku: "", lotNo: "", qtyExpected: 0, qtyReceived: 0, inspectionStatus: "PENDING", discrepancyType: "", dispositionNote: "" }]
+    lines: [{ poLineNo: "1", sku: "", lotNo: "", batchNo: "", qtyExpected: 0, qtyReceived: 0, inspectionStatus: "PENDING", discrepancyType: "", dispositionNote: "" }]
   });
   const receiptCloseForm = ref({ receiptId: "" });
   const receiptCloseStatus = ref("");
@@ -14,6 +14,7 @@ export function useReceivingWorkspace(auth) {
     receiptId: "",
     poLineNo: "",
     lotNo: "",
+    batchNo: "",
     storageLocationId: "",
     title: "",
     file: null
@@ -85,6 +86,7 @@ export function useReceivingWorkspace(auth) {
     formData.append("file", receiptDocumentForm.value.file);
     formData.append("poLineNo", receiptDocumentForm.value.poLineNo || "");
     formData.append("lotNo", receiptDocumentForm.value.lotNo || "");
+    formData.append("batchNo", receiptDocumentForm.value.batchNo || "");
     formData.append("storageLocationId", receiptDocumentForm.value.storageLocationId || "");
     formData.append("title", receiptDocumentForm.value.title || "");
 

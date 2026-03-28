@@ -56,6 +56,7 @@ defineProps({
       <input v-model="line.poLineNo" placeholder="PO Line" />
       <input v-model="line.sku" placeholder="SKU" />
       <input v-model="line.lotNo" placeholder="Lot" />
+      <input v-model="line.batchNo" placeholder="Batch" />
       <input v-model.number="line.qtyExpected" type="number" placeholder="Expected" />
       <input v-model.number="line.qtyReceived" type="number" placeholder="Received" />
       <select v-model="line.inspectionStatus">
@@ -82,6 +83,7 @@ defineProps({
     <input v-model="receiptDocumentForm.receiptId" placeholder="Receipt ID" />
     <input v-model="receiptDocumentForm.poLineNo" placeholder="PO Line (optional)" />
     <input v-model="receiptDocumentForm.lotNo" placeholder="Lot (optional)" />
+    <input v-model="receiptDocumentForm.batchNo" placeholder="Batch (optional)" />
     <input v-model="receiptDocumentForm.storageLocationId" placeholder="Storage Location ID (optional)" />
     <input v-model="receiptDocumentForm.title" placeholder="Document title (optional)" />
     <input type="file" accept=".pdf,image/png,image/jpeg" @change="onReceiptDocumentFileChange" />

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createWorkOrder, logWorkOrderEvent, runMrp } from "../backend/src/services/planning-service.js";
 import { searchHub } from "../backend/src/services/search-service.js";
-import { publishEvent, queueOfflineMessage } from "../backend/src/services/notification-service.js";
+import { publishEvent, queueOfflineMessage, subscribeNotification } from "../backend/src/services/notification-service.js";
 import { optionalAuth } from "../backend/src/middleware/auth.js";
 import { pool } from "../backend/src/db.js";
 import { config } from "../backend/src/config.js";
@@ -280,6 +280,17 @@ test("notification scheduling honors custom subscription DND window", async () =
   pool.execute = originalExecute;
 });
 
+test("subscribeNotification rejects unsupported frequency", async () => {
+  await assert.rejects(
+    () =>
+      subscribeNotification(
+        { topic: "RECEIPT_ACK", frequency: "WEEKLY", dndStart: "21:00", dndEnd: "07:00" },
+        { id: 9 }
+      ),
+    /Frequency must be one of IMMEDIATE, HOURLY, DAILY/
+  );
+});
+
 test("queueOfflineMessage rejects unsupported connector channel", async () => {
   await assert.rejects(
     () =>
@@ -324,8 +335,10 @@ test("notification scheduling supports same-day DND window", async () => {
 
 test("searchHub supports typo tolerance and source filter", async () => {
   let capturedParams = [];
+  let capturedSql = "";
   pool.execute = async (sql, params) => {
     if (sql.includes("FROM search_documents")) {
+      capturedSql = sql;
       capturedParams = params;
       return [[
         {
@@ -353,6 +366,7 @@ test("searchHub supports typo tolerance and source filter", async () => {
     endDate: null
   });
   assert.equal(results.length, 1);
+  assert.match(capturedSql, /MATCH\(title, body, tags\) AGAINST \(\? IN BOOLEAN MODE\)/);
   assert.ok(capturedParams.includes("PORTAL"));
 
   pool.execute = originalExecute;

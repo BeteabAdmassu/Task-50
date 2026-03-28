@@ -12,6 +12,7 @@ function buildProps() {
           poLineNo: "1",
           sku: "SKU-1",
           lotNo: "LOT-1",
+          batchNo: "B-1",
           qtyExpected: 10,
           qtyReceived: 10,
           inspectionStatus: "PENDING",
@@ -28,6 +29,7 @@ function buildProps() {
       receiptId: "100",
       poLineNo: "1",
       lotNo: "LOT-1",
+      batchNo: "B-1",
       storageLocationId: "",
       title: "BOL",
       file: null

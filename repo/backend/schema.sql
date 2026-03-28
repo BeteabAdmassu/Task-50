@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS receipt_lines (
   po_line_no VARCHAR(40) NOT NULL,
   sku VARCHAR(80) NOT NULL,
   lot_no VARCHAR(80) NULL,
+  batch_no VARCHAR(80) NULL,
   qty_expected DECIMAL(18,4) NOT NULL,
   qty_received DECIMAL(18,4) NOT NULL,
   inspection_status VARCHAR(30) NOT NULL,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS receipt_documents (
   receipt_id BIGINT NOT NULL,
   po_line_no VARCHAR(40) NULL,
   lot_no VARCHAR(80) NULL,
+  batch_no VARCHAR(80) NULL,
   storage_location_id BIGINT NULL,
   title VARCHAR(255) NULL,
   original_name VARCHAR(255) NOT NULL,
@@ -96,6 +98,38 @@ CREATE TABLE IF NOT EXISTS receipt_documents (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (receipt_id) REFERENCES receipts(id)
 );
+
+SET @has_receipt_line_batch = (
+  SELECT COUNT(*)
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'receipt_lines'
+    AND column_name = 'batch_no'
+);
+SET @receipt_line_batch_sql = IF(
+  @has_receipt_line_batch = 0,
+  'ALTER TABLE receipt_lines ADD COLUMN batch_no VARCHAR(80) NULL AFTER lot_no',
+  'SELECT 1'
+);
+PREPARE receipt_line_batch_stmt FROM @receipt_line_batch_sql;
+EXECUTE receipt_line_batch_stmt;
+DEALLOCATE PREPARE receipt_line_batch_stmt;
+
+SET @has_receipt_document_batch = (
+  SELECT COUNT(*)
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'receipt_documents'
+    AND column_name = 'batch_no'
+);
+SET @receipt_document_batch_sql = IF(
+  @has_receipt_document_batch = 0,
+  'ALTER TABLE receipt_documents ADD COLUMN batch_no VARCHAR(80) NULL AFTER lot_no',
+  'SELECT 1'
+);
+PREPARE receipt_document_batch_stmt FROM @receipt_document_batch_sql;
+EXECUTE receipt_document_batch_stmt;
+DEALLOCATE PREPARE receipt_document_batch_stmt;
 
 CREATE TABLE IF NOT EXISTS receipt_discrepancies (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -335,6 +369,22 @@ CREATE TABLE IF NOT EXISTS search_documents (
   UNIQUE KEY uq_search_entity (entity_type, entity_id),
   INDEX idx_search_meta (entity_type, source, topic, created_at)
 );
+
+SET @has_search_fulltext = (
+  SELECT COUNT(*)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'search_documents'
+    AND index_name = 'ft_search_documents_text'
+);
+SET @search_fulltext_sql = IF(
+  @has_search_fulltext = 0,
+  'ALTER TABLE search_documents ADD FULLTEXT INDEX ft_search_documents_text (title, body, tags)',
+  'SELECT 1'
+);
+PREPARE search_fulltext_stmt FROM @search_fulltext_sql;
+EXECUTE search_fulltext_stmt;
+DEALLOCATE PREPARE search_fulltext_stmt;
 
 CREATE TABLE IF NOT EXISTS scoring_rule_versions (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

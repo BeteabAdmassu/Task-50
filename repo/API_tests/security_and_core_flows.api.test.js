@@ -420,7 +420,7 @@ test("POST /api/receiving/receipts captures inspection status per line", async (
         return [{ insertId: 555 }];
       }
       if (sql.includes("INSERT INTO receipt_lines")) {
-        capturedInspectionStatus = params[6];
+        capturedInspectionStatus = params[7];
         return [{ affectedRows: 1 }];
       }
       if (sql.includes("INSERT INTO audit_logs")) {
@@ -449,6 +449,7 @@ test("POST /api/receiving/receipts captures inspection status per line", async (
           poLineNo: "1",
           sku: "SKU-1",
           lotNo: "LOT-1",
+          batchNo: "BATCH-1",
           qtyExpected: 10,
           qtyReceived: 10,
           inspectionStatus: "FAIL"
@@ -461,6 +462,7 @@ test("POST /api/receiving/receipts captures inspection status per line", async (
   assert.equal(body.id, 555);
   assert.equal(capturedInspectionStatus, "FAIL");
 
+  
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;
   pool.getConnection = originalGetConnection;
@@ -1175,6 +1177,7 @@ test("receipt document upload and list works for same-site clerk", async () => {
     }
     if (sql.includes("INSERT INTO receipt_documents")) {
       uploadedId = params[0];
+      assert.equal(params[4], "B-9");
       return [{ affectedRows: 1 }];
     }
     if (sql.includes("INSERT INTO search_documents")) return [{ affectedRows: 1 }];
@@ -1184,6 +1187,7 @@ test("receipt document upload and list works for same-site clerk", async () => {
         receipt_id: 501,
         po_line_no: "10",
         lot_no: "L1",
+        batch_no: "B-9",
         storage_location_id: 9,
         title: "BOL",
         original_name: "doc.png",
@@ -1201,6 +1205,7 @@ test("receipt document upload and list works for same-site clerk", async () => {
   formData.append("file", new File(["x"], "doc.png", { type: "image/png" }));
   formData.append("poLineNo", "10");
   formData.append("lotNo", "L1");
+  formData.append("batchNo", "B-9");
   formData.append("storageLocationId", "9");
   formData.append("title", "BOL");
 
@@ -1220,6 +1225,7 @@ test("receipt document upload and list works for same-site clerk", async () => {
   assert.equal(listRes.status, 200);
   assert.equal(Array.isArray(listBody), true);
   assert.equal(listBody.length, 1);
+  assert.equal(listBody[0].batch_no, "B-9");
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;

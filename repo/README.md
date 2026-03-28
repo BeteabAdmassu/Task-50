@@ -57,10 +57,12 @@ Use this section only for local non-Docker runs.
 1. Create a MySQL database named `forgeops`.
 2. Apply `backend/schema.sql`, then `backend/seed.sql`.
    - If upgrading an existing DB, apply schema updates for:
-      - `receipt_documents` table
-      - `search_documents` unique key `uq_search_entity`
-      - `notification_subscriptions.dnd_start` and `notification_subscriptions.dnd_end`
-      - `inventory_locations.site_id` and index `idx_inventory_site_active`
+       - `receipt_documents` table
+       - `receipt_lines.batch_no` and `receipt_documents.batch_no`
+       - `search_documents` unique key `uq_search_entity`
+       - `search_documents` FULLTEXT index `ft_search_documents_text`
+       - `notification_subscriptions.dnd_start` and `notification_subscriptions.dnd_end`
+       - `inventory_locations.site_id` and index `idx_inventory_site_active`
       - `application_attachment_requirements` (if missing)
 3. Install backend deps:
 

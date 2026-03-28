@@ -12,6 +12,8 @@ function isValidHhMm(value) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 }
 
+const allowedFrequencies = new Set(["IMMEDIATE", "HOURLY", "DAILY"]);
+
 function resolveDndWindow(subscription) {
   const start = subscription?.dnd_start || config.defaultDndStart;
   const end = subscription?.dnd_end || config.defaultDndEnd;
@@ -94,6 +96,9 @@ function nextDaily6pm(now = dayjs()) {
 export async function subscribeNotification(input, actor) {
   const dndStart = input.dndStart || config.defaultDndStart;
   const dndEnd = input.dndEnd || config.defaultDndEnd;
+  if (!allowedFrequencies.has(input.frequency)) {
+    throw new AppError(400, "Frequency must be one of IMMEDIATE, HOURLY, DAILY");
+  }
   if (!isValidHhMm(dndStart) || !isValidHhMm(dndEnd)) {
     throw new AppError(400, "DND window must be in HH:mm format");
   }

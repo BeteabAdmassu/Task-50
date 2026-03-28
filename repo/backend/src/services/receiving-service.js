@@ -78,14 +78,15 @@ export async function createReceipt(input, actor) {
       
       await conn.execute(
         `INSERT INTO receipt_lines
-          (receipt_id, po_line_no, sku, lot_no, qty_expected, qty_received,
+          (receipt_id, po_line_no, sku, lot_no, batch_no, qty_expected, qty_received,
            inspection_status, storage_location_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           header.insertId,
           line.poLineNo,
           line.sku,
           line.lotNo || null,
+          line.batchNo || null,
           qtyExpected,
           qtyReceived,
           line.inspectionStatus || "PENDING",
@@ -297,14 +298,15 @@ export async function uploadReceiptDocument(receiptId, payload, file, actor) {
 
   await pool.execute(
     `INSERT INTO receipt_documents
-      (id, receipt_id, po_line_no, lot_no, storage_location_id, title,
+      (id, receipt_id, po_line_no, lot_no, batch_no, storage_location_id, title,
        original_name, stored_path, mime_type, size_bytes, uploaded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       docId,
       receiptId,
       payload?.poLineNo || null,
       payload?.lotNo || null,
+      payload?.batchNo || null,
       payload?.storageLocationId || null,
       payload?.title || null,
       originalName,
@@ -326,6 +328,7 @@ export async function uploadReceiptDocument(receiptId, payload, file, actor) {
       poNumber: receipt.po_number,
       poLineNo: payload?.poLineNo || null,
       lotNo: payload?.lotNo || null,
+      batchNo: payload?.batchNo || null,
       storageLocationId: payload?.storageLocationId || null,
       originalName
     }
@@ -336,7 +339,13 @@ export async function uploadReceiptDocument(receiptId, payload, file, actor) {
     entityId: receiptId,
     title: `Receipt ${receiptId} document uploaded`,
     body: `Document ${originalName} uploaded for PO ${receipt.po_number}`,
-    tags: ["receipt", "document", payload?.poLineNo || "no-line", payload?.lotNo || "no-lot"],
+    tags: [
+      "receipt",
+      "document",
+      payload?.poLineNo || "no-line",
+      payload?.lotNo || "no-lot",
+      payload?.batchNo || "no-batch"
+    ],
     source: "RECEIVING",
     topic: "INBOUND"
   });
@@ -347,12 +356,23 @@ export async function uploadReceiptDocument(receiptId, payload, file, actor) {
 export async function listReceiptDocuments(receiptId, actor) {
   await getReceiptForActor(receiptId, actor);
   const [rows] = await pool.execute(
-    `SELECT id, receipt_id, po_line_no, lot_no, storage_location_id, title,
+    `SELECT id, receipt_id, po_line_no, lot_no, batch_no, storage_location_id, title,
             original_name, mime_type, size_bytes, uploaded_by, created_at
      FROM receipt_documents
      WHERE receipt_id = ?
      ORDER BY created_at DESC`,
     [receiptId]
   );
-  return rows;
+  return rows.map((row) => ({
+    ...row,
+    poLineNo: row.po_line_no,
+    lotNo: row.lot_no,
+    batchNo: row.batch_no,
+    storageLocationId: row.storage_location_id,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    uploadedBy: row.uploaded_by,
+    receiptId: row.receipt_id
+  }));
 }

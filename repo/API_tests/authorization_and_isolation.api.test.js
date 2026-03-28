@@ -357,3 +357,39 @@ test("notification subscription accepts custom DND window", async () => {
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;
 });
+
+test("notification subscription rejects unsupported frequency", async () => {
+  const token = jwt.sign({ sub: 2, sessionId: "sess-notify-invalid-frequency" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-notify-invalid-frequency",
+        user_id: 2,
+        last_activity_at: new Date(),
+        username: "hr1",
+        role: "HR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/subscriptions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ topic: "RECEIPT_ACK", frequency: "WEEKLY", dndStart: "20:30", dndEnd: "06:15" })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(body.error, /Frequency must be one of IMMEDIATE, HOURLY, DAILY/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});

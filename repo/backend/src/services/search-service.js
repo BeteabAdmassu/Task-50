@@ -97,12 +97,21 @@ function applyActorScope(actor, where, values) {
 export async function searchHub({ actor, query, startDate, endDate, source, topic, entityType }) {
   const terms = expandTerms(query || "");
   const likePredicates = terms.map(() => "(title LIKE ? OR body LIKE ? OR tags LIKE ?)").join(" OR ");
+  const booleanQuery = terms.map((term) => `${term}*`).join(" ");
   const values = [];
+  const searchPredicates = [];
+  if (terms.length) {
+    searchPredicates.push("MATCH(title, body, tags) AGAINST (? IN BOOLEAN MODE)");
+    values.push(booleanQuery);
+  }
   for (const term of terms) {
     values.push(`%${term}%`, `%${term}%`, `%${term}%`);
   }
+  if (likePredicates) {
+    searchPredicates.push(likePredicates);
+  }
 
-  const where = [likePredicates ? `(${likePredicates})` : "1=1"];
+  const where = [searchPredicates.length ? `(${searchPredicates.join(" OR ")})` : "1=1"];
   if (startDate) {
     where.push("created_at >= ?");
     values.push(startDate);
