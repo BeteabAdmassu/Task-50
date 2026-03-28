@@ -26,32 +26,42 @@ export async function createRuleVersion(input, actor) {
   const weights = input.weights || defaultWeights;
   assert(Math.abs(weights.coursework + weights.midterm + weights.final - 1) < 0.001, 400, "Weights must total 1");
 
-  const [result] = await pool.execute(
-    `INSERT INTO scoring_rule_versions
-      (version_name, weights_json, retake_policy, effective_date, created_by)
-     VALUES (?, ?, ?, ?, ?)`,
-    [
-      input.versionName,
-      JSON.stringify(weights),
-      input.retakePolicy || "HIGHEST_SCORE",
-      input.effectiveDate,
-      actor.id
-    ]
-  );
-  await writeAudit({
-    actorUserId: actor.id,
-    action: "CREATE",
-    entityType: "scoring_rule_version",
-    entityId: result.insertId,
-    beforeValue: null,
-    afterValue: {
-      versionName: input.versionName,
-      weights,
-      retakePolicy: input.retakePolicy || "HIGHEST_SCORE",
-      effectiveDate: input.effectiveDate
-    }
+  return withTx(async (conn) => {
+    const [result] = await conn.execute(
+      `INSERT INTO scoring_rule_versions
+        (version_name, weights_json, retake_policy, effective_date, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        input.versionName,
+        JSON.stringify(weights),
+        input.retakePolicy || "HIGHEST_SCORE",
+        input.effectiveDate,
+        actor.id
+      ]
+    );
+    await writeAudit({
+      actorUserId: actor.id,
+      action: "CREATE",
+      entityType: "scoring_rule_version",
+      entityId: result.insertId,
+      beforeValue: null,
+      afterValue: {
+        versionName: input.versionName,
+        weights,
+        retakePolicy: input.retakePolicy || "HIGHEST_SCORE",
+        effectiveDate: input.effectiveDate
+      },
+      conn
+    });
+
+    const markedForRecalc = await markScoresForRecalc(result.insertId, actor, conn, {
+      failWhenEmpty: false,
+      auditRuleVersion: true,
+      auditPayload: { autoRecalculateTriggered: true }
+    });
+
+    return { id: result.insertId, markedForRecalc };
   });
-  return { id: result.insertId };
 }
 
 export async function scoreQualification(input, actor) {
@@ -124,39 +134,58 @@ function chooseScore(scores, policy) {
 
 export async function backtrackRecalculate(ruleVersionId, actor) {
   return withTx(async (conn) => {
-    const [rows] = await conn.execute(
-      `SELECT id, candidate_id, credit_hours
-       FROM qualification_scores
-       WHERE rule_version_id = ?`,
-      [ruleVersionId]
+    const markedForRecalc = await markScoresForRecalc(ruleVersionId, actor, conn, {
+      failWhenEmpty: true,
+      auditRuleVersion: true,
+      auditPayload: { recalculationRequested: true }
+    });
+    return { markedForRecalc };
+  });
+}
+
+async function markScoresForRecalc(ruleVersionId, actor, conn, options) {
+  const [rows] = await conn.execute(
+    `SELECT id, candidate_id, credit_hours
+     FROM qualification_scores
+     WHERE rule_version_id = ?`,
+    [ruleVersionId]
+  );
+  if (!rows.length && options.failWhenEmpty) {
+    throw new AppError(404, "No scores found for rule version");
+  }
+
+  for (const row of rows) {
+    await conn.execute(
+      `UPDATE qualification_scores
+       SET recalculation_pending = 1
+       WHERE id = ?`,
+      [row.id]
     );
-    if (!rows.length) throw new AppError(404, "No scores found for rule version");
-    for (const row of rows) {
-      await conn.execute(
-        `UPDATE qualification_scores
-         SET recalculation_pending = 1
-         WHERE id = ?`,
-        [row.id]
-      );
-      await writeAudit({
-        actorUserId: actor.id,
-        action: "UPDATE",
-        entityType: "qualification_score",
-        entityId: row.id,
-        beforeValue: { recalculationPending: false, ruleVersionId: Number(ruleVersionId) },
-        afterValue: { recalculationPending: true, ruleVersionId: Number(ruleVersionId) },
-        conn
-      });
-    }
+    await writeAudit({
+      actorUserId: actor.id,
+      action: "UPDATE",
+      entityType: "qualification_score",
+      entityId: row.id,
+      beforeValue: { recalculationPending: false, ruleVersionId: Number(ruleVersionId) },
+      afterValue: { recalculationPending: true, ruleVersionId: Number(ruleVersionId) },
+      conn
+    });
+  }
+
+  if (options.auditRuleVersion) {
     await writeAudit({
       actorUserId: actor.id,
       action: "UPDATE",
       entityType: "scoring_rule_version",
       entityId: ruleVersionId,
       beforeValue: { recalculationRequested: false },
-      afterValue: { recalculationRequested: true, affectedScores: rows.length },
+      afterValue: {
+        ...options.auditPayload,
+        affectedScores: rows.length
+      },
       conn
     });
-    return { markedForRecalc: rows.length };
-  });
+  }
+
+  return rows.length;
 }

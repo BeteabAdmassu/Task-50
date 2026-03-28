@@ -450,3 +450,86 @@ test("searchHub applies filter boundaries in generated query params", async () =
 
   pool.execute = originalExecute;
 });
+
+test("searchHub paginates empty-query results", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM search_documents")) {
+      const rows = Array.from({ length: 15 }, (_, index) => ({
+        entity_type: "candidate",
+        entity_id: String(index + 1),
+        title: `Candidate ${String(index + 1).padStart(2, "0")}`,
+        body: "body",
+        tags: "tag",
+        source: "PORTAL",
+        topic: "APPLICANT",
+        created_at: new Date(Date.now() - index * 1000)
+      }));
+      return [rows];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const page2 = await searchHub({
+    actor: { id: 1, role: "ADMIN", siteId: 1 },
+    query: "",
+    startDate: null,
+    endDate: null,
+    source: null,
+    topic: null,
+    entityType: null,
+    page: 2,
+    pageSize: 5
+  });
+
+  assert.equal(page2.length, 5);
+  assert.equal(page2[0].entity_id, "6");
+
+  pool.execute = originalExecute;
+});
+
+test("searchHub supports explicit sortBy and sortDir", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM search_documents")) {
+      return [[
+        {
+          entity_type: "candidate",
+          entity_id: "1",
+          title: "Charlie",
+          body: "Candidate onboarding",
+          tags: "applicant,hr",
+          source: "PORTAL",
+          topic: "APPLICANT",
+          created_at: new Date()
+        },
+        {
+          entity_type: "candidate",
+          entity_id: "2",
+          title: "Alpha",
+          body: "Candidate onboarding",
+          tags: "applicant,hr",
+          source: "PORTAL",
+          topic: "APPLICANT",
+          created_at: new Date()
+        }
+      ]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const sorted = await searchHub({
+    actor: { id: 1, role: "ADMIN", siteId: 1 },
+    query: "candidate",
+    startDate: null,
+    endDate: null,
+    source: null,
+    topic: null,
+    entityType: null,
+    sortBy: "title",
+    sortDir: "ASC"
+  });
+
+  assert.equal(sorted.length, 2);
+  assert.equal(sorted[0].title, "Alpha");
+
+  pool.execute = originalExecute;
+});

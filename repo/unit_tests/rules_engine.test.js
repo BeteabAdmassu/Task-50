@@ -11,17 +11,29 @@ const originalExecute = pool.execute;
 const originalGetConnection = pool.getConnection;
 
 test("createRuleVersion persists weights and writes audit", async () => {
-  let auditWritten = false;
-  pool.execute = async (sql) => {
-    if (sql.includes("INSERT INTO scoring_rule_versions")) {
-      return [{ insertId: 5 }];
+  let auditCount = 0;
+  let selectSeen = false;
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql) {
+      if (sql.includes("INSERT INTO scoring_rule_versions")) {
+        return [{ insertId: 5 }];
+      }
+      if (sql.includes("FROM qualification_scores")) {
+        selectSeen = true;
+        return [[]];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        auditCount += 1;
+        return [{ insertId: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
     }
-    if (sql.includes("INSERT INTO audit_logs")) {
-      auditWritten = true;
-      return [{ insertId: 1 }];
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
   };
+  pool.getConnection = async () => conn;
 
   const result = await createRuleVersion(
     {
@@ -32,9 +44,11 @@ test("createRuleVersion persists weights and writes audit", async () => {
     { id: 10 }
   );
   assert.equal(result.id, 5);
-  assert.equal(auditWritten, true);
+  assert.equal(result.markedForRecalc, 0);
+  assert.equal(selectSeen, true);
+  assert.equal(auditCount >= 2, true);
 
-  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
 });
 
 test("scoreQualification applies highest-score policy and GPA conversion", async () => {

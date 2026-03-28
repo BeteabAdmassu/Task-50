@@ -629,6 +629,71 @@ test("GET /api/search returns 401 when unauthenticated", async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
+test("GET /api/search supports pagination and sorting query parameters", async () => {
+  const token = jwt.sign({ sub: 4, sessionId: "sess-search-pagination" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-search-pagination",
+        user_id: 4,
+        last_activity_at: new Date(),
+        username: "clerk1",
+        role: "CLERK",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM search_documents")) {
+      assert.ok(sql.includes("MATCH(title, body, tags) AGAINST (? IN BOOLEAN MODE)"));
+      return [[
+        {
+          entity_type: "receipt",
+          entity_id: "1",
+          title: "Bravo",
+          body: "receiving candidate",
+          tags: "receipt",
+          source: "RECEIVING",
+          topic: "INBOUND",
+          created_at: new Date("2026-01-02T00:00:00Z")
+        },
+        {
+          entity_type: "receipt",
+          entity_id: "2",
+          title: "Alpha",
+          body: "receiving candidate",
+          tags: "receipt",
+          source: "RECEIVING",
+          topic: "INBOUND",
+          created_at: new Date("2026-01-01T00:00:00Z")
+        }
+      ]];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/search?q=candidate&page=1&pageSize=1&sortBy=title&sortDir=ASC`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(Array.isArray(body), true);
+  assert.equal(body.length, 1);
+  assert.equal(body[0].title, "Alpha");
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
 test("GET /api/hr/candidates/:id returns 404 for missing candidate", async () => {
   const token = jwt.sign({ sub: 2, sessionId: "sess-404" }, config.jwtSecret, { expiresIn: 3600 });
 

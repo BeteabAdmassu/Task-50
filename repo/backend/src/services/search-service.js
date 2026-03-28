@@ -94,7 +94,51 @@ function applyActorScope(actor, where, values) {
   where.push("1=0");
 }
 
-export async function searchHub({ actor, query, startDate, endDate, source, topic, entityType }) {
+function normalizePaging(page, pageSize) {
+  const normalizedPage = Number.isFinite(Number(page)) ? Math.max(1, Number(page)) : 1;
+  const normalizedPageSize = Number.isFinite(Number(pageSize))
+    ? Math.min(100, Math.max(1, Number(pageSize)))
+    : 100;
+  return { page: normalizedPage, pageSize: normalizedPageSize };
+}
+
+function sortRows(rows, sortBy, sortDir) {
+  const direction = String(sortDir || "DESC").toUpperCase() === "ASC" ? 1 : -1;
+  const key = String(sortBy || "").toLowerCase();
+  if (key === "title") {
+    return rows.sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")) * direction);
+  }
+  if (key === "source") {
+    return rows.sort((a, b) => String(a.source || "").localeCompare(String(b.source || "")) * direction);
+  }
+  if (key === "topic") {
+    return rows.sort((a, b) => String(a.topic || "").localeCompare(String(b.topic || "")) * direction);
+  }
+  if (key === "createdat" || key === "created_at") {
+    return rows.sort((a, b) => (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * direction);
+  }
+  return rows;
+}
+
+function paginateRows(rows, page, pageSize) {
+  const offset = (page - 1) * pageSize;
+  return rows.slice(offset, offset + pageSize);
+}
+
+export async function searchHub({
+  actor,
+  query,
+  startDate,
+  endDate,
+  source,
+  topic,
+  entityType,
+  page,
+  pageSize,
+  sortBy,
+  sortDir
+}) {
+  const paging = normalizePaging(page, pageSize);
   const terms = expandTerms(query || "");
   const likePredicates = terms.map(() => "(title LIKE ? OR body LIKE ? OR tags LIKE ?)").join(" OR ");
   const booleanQuery = terms.map((term) => `${term}*`).join(" ");
@@ -145,15 +189,22 @@ export async function searchHub({ actor, query, startDate, endDate, source, topi
   );
 
   if (!terms.length) {
-    return rows.slice(0, 100);
+    const ordered = sortRows(rows, sortBy || "createdAt", sortDir || "DESC");
+    return paginateRows(ordered, paging.page, paging.pageSize);
   }
 
-  return rows
+  const ranked = rows
     .map((row) => ({ row, score: rankRow(row, terms) }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 100)
     .map((item) => item.row);
+
+  if (!sortBy) {
+    return paginateRows(ranked, paging.page, paging.pageSize);
+  }
+
+  const ordered = sortRows(ranked, sortBy, sortDir);
+  return paginateRows(ordered, paging.page, paging.pageSize);
 }
 
 function rankRow(row, terms) {

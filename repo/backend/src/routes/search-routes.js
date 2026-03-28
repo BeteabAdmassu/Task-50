@@ -12,7 +12,11 @@ router.get("/", requireAuth, async (ctx) => {
     endDate: ctx.query.endDate,
     source: ctx.query.source,
     topic: ctx.query.topic,
-    entityType: ctx.query.entityType
+    entityType: ctx.query.entityType,
+    page: ctx.query.page,
+    pageSize: ctx.query.pageSize,
+    sortBy: ctx.query.sortBy,
+    sortDir: ctx.query.sortDir
   });
 });
 
