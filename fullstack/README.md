@@ -137,6 +137,11 @@ npm.cmd run test
 Integration tests only run when `RUN_DB_INTEGRATION_TESTS=1` is set.
 If unset, they are skipped safely.
 
+Prerequisites (required before enabling DB integration tests):
+- Apply schema: `backend/schema.sql`
+- Apply seed data: `backend/seed.sql`
+- Seed users: `node backend/scripts/seed-users.js`
+
 Optional credential overrides (defaults match `backend/scripts/seed-users.js`):
 - `DB_INT_ADMIN_USER` (default `admin`)
 - `DB_INT_ADMIN_PASS` (default `AdminPassw0rd!`)
@@ -152,6 +157,22 @@ RUN_DB_INTEGRATION_TESTS=1 node --test --test-concurrency=1 integration_tests/*.
 Windows PowerShell:
 
 ```powershell
+$env:DB_HOST="127.0.0.1"
+$env:DB_PORT="3306"
+$env:DB_USER="root"
+$env:DB_PASSWORD="password"
+$env:DB_NAME="forgeops"
 $env:RUN_DB_INTEGRATION_TESTS="1"
+cd fullstack
 node --test --test-concurrency=1 integration_tests/*.test.js
 ```
+
+Expected outcomes:
+- Without `RUN_DB_INTEGRATION_TESTS=1`: suite reports skipped DB integration tests.
+- With `RUN_DB_INTEGRATION_TESTS=1` and valid DB setup: integration tests pass.
+
+Troubleshooting:
+- DB connection refused: verify `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` and that MySQL is running.
+- Unknown table / missing schema: re-apply `backend/schema.sql`, then `backend/seed.sql`.
+- Login failed for preflight users: run `node backend/scripts/seed-users.js` to restore `admin` and `clerk1` test users.
+- Credential/permission mismatch with overrides: confirm `DB_INT_ADMIN_*` and `DB_INT_CLERK_*` env vars match actual seeded users.
