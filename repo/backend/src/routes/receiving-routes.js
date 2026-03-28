@@ -37,8 +37,7 @@ router.post(
   requireAuth,
   requirePermission("RECEIPT_CLOSE"),
   enforceAttributeRule(async (user, ctx) => {
-    if (["ADMIN", "PLANNER_SUPERVISOR"].includes(user.role)) return true;
-    if (user.role !== "CLERK") return false;
+    if (user.role === "ADMIN") return true;
     const [rows] = await pool.execute("SELECT site_id FROM receipts WHERE id = ?", [ctx.params.id]);
     if (!rows.length) return true;
     return Number(rows[0].site_id) === Number(user.siteId);

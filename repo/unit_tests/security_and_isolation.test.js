@@ -28,7 +28,7 @@ test("planning runMrp denies planner cross-site access", async () => {
 
 test("planning runMrp allows same-site planner", async () => {
   let step = 0;
-  pool.execute = async (sql) => {
+  pool.execute = async (sql, params) => {
     step += 1;
     if (step === 1 && sql.includes("FROM production_plans") && sql.includes("WHERE id = ?")) {
       return [[{ id: 10, site_id: 1, plan_name: "P", start_week: "2026-03-30", status: "DRAFT" }]];
@@ -40,6 +40,8 @@ test("planning runMrp allows same-site planner", async () => {
       return [[{ component_code: "RM-1", qty_per: 2 }]];
     }
     if (sql.includes("FROM inventory_locations")) {
+      assert.equal(params[0], "RM-1");
+      assert.equal(params[1], 1);
       return [[{ on_hand: 120 }]];
     }
     throw new Error(`Unexpected SQL: ${sql}`);
@@ -48,6 +50,33 @@ test("planning runMrp allows same-site planner", async () => {
   const result = await runMrp(10, { id: 1, role: "PLANNER", siteId: 1 });
   assert.equal(result.length, 1);
   assert.equal(result[0].shortageQty, 80);
+
+  pool.execute = originalExecute;
+});
+
+test("planning runMrp inventory aggregation stays site scoped", async () => {
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM production_plans") && sql.includes("WHERE id = ?")) {
+      return [[{ id: 10, site_id: 3, plan_name: "P", start_week: "2026-03-30", status: "DRAFT" }]];
+    }
+    if (sql.includes("FROM production_plan_lines")) {
+      return [[{ item_code: "FG-1", total_qty: 100 }]];
+    }
+    if (sql.includes("FROM bill_of_materials")) {
+      return [[{ component_code: "RM-1", qty_per: 1 }]];
+    }
+    if (sql.includes("FROM inventory_locations")) {
+      assert.match(sql, /site_id = \?/);
+      assert.equal(params[0], "RM-1");
+      assert.equal(params[1], 3);
+      return [[{ on_hand: 40 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const result = await runMrp(10, { id: 1, role: "PLANNER", siteId: 3 });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].onHandQty, 40);
 
   pool.execute = originalExecute;
 });

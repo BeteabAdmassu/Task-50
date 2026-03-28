@@ -175,6 +175,53 @@ test("POST /api/receiving/receipts/:id/close blocks clerk from other site", asyn
   pool.execute = originalExecute;
 });
 
+test("POST /api/receiving/receipts/:id/close blocks supervisor from other site", async () => {
+  const token = jwt.sign({ sub: 12, sessionId: "sess-close-supervisor" }, config.jwtSecret, { expiresIn: 3600 });
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-close-supervisor",
+        user_id: 12,
+        last_activity_at: new Date(),
+        username: "supervisor1",
+        role: "PLANNER_SUPERVISOR",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 0,
+        has_sensitive_permission: 0
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) {
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.includes("FROM role_permissions rp")) {
+      return [[{ 1: 1 }]];
+    }
+    if (sql.includes("SELECT site_id FROM receipts")) {
+      return [[{ site_id: 2 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/receiving/receipts/123/close`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`
+    }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 403);
+  assert.match(body.error, /Attribute rule prevented this action/);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
 test("POST /api/receiving/putaway/recommend denies cross-site clerk request", async () => {
   const token = jwt.sign({ sub: 4, sessionId: "sess-putaway-cross-site" }, config.jwtSecret, { expiresIn: 3600 });
 

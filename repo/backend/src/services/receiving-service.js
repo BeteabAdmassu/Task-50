@@ -162,10 +162,8 @@ export async function closeReceipt(receiptId, actor) {
   
   assert(receipt.status === "OPEN", 400, "Receipt is not open");
 
-  if (actor.role === "CLERK") {
-    assert(Number(actor.siteId) === Number(receipt.site_id), 403, "Clerks can only close receipts for their site");
-  } else if (!["ADMIN", "PLANNER_SUPERVISOR"].includes(actor.role)) {
-    throw new AppError(403, "Only site clerks, supervisors, or admins can close receipts");
+  if (actor.role !== "ADMIN") {
+    assert(Number(actor.siteId) === Number(receipt.site_id), 403, "Can only close receipts for your site");
   }
   
   const [unresolvedDiscrepancies] = await pool.execute(

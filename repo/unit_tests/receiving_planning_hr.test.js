@@ -105,6 +105,22 @@ test("closeReceipt rejects repeated close attempts after first success", async (
   pool.execute = originalExecute;
 });
 
+test("closeReceipt rejects supervisor closing cross-site receipt", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM receipts WHERE id")) {
+      return [[{ id: 9, site_id: 2, status: "OPEN", received_by: 4 }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await assert.rejects(
+    () => closeReceipt(9, { id: 2, role: "PLANNER_SUPERVISOR", siteId: 1 }),
+    /Can only close receipts for your site/
+  );
+
+  pool.execute = originalExecute;
+});
+
 test("recommendPutaway skips incompatible mixed storage and picks valid bin", async () => {
   pool.execute = async (sql, params) => {
     if (sql.includes("FROM inventory_locations")) {

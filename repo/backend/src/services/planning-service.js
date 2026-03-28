@@ -100,7 +100,7 @@ export async function upsertMpsPlan(input, actor) {
 }
 
 export async function runMrp(planId, actor) {
-  await getPlanWithAccess(planId, actor);
+  const plan = await getPlanWithAccess(planId, actor);
   const [planLines] = await pool.execute(
     `SELECT ppl.item_code, SUM(ppl.planned_qty) AS total_qty
      FROM production_plan_lines ppl
@@ -122,8 +122,9 @@ export async function runMrp(planId, actor) {
       const [[stock]] = await pool.execute(
         `SELECT COALESCE(SUM(occupied_qty), 0) AS on_hand
          FROM inventory_locations
-         WHERE current_sku = ?`,
-        [comp.component_code]
+         WHERE current_sku = ?
+           AND site_id = ?`,
+        [comp.component_code, plan.site_id]
       );
       requirements.push({
         componentCode: comp.component_code,
