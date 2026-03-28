@@ -667,6 +667,93 @@ test("POST /api/hr/applications repeated submission sets duplicateFlag", async (
   pool.getConnection = originalGetConnection;
 });
 
+test("POST /api/hr/applications flags duplicate for mixed-type ssnLast4 inputs", async () => {
+  const savedCandidates = [];
+  let nextId = 500;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("INSERT INTO audit_logs")) {
+      return [{ insertId: 1 }];
+    }
+    if (sql.includes("FROM application_form_fields")) {
+      return [[{ field_key: "work_eligibility" }]];
+    }
+    if (sql.includes("FROM candidates WHERE full_name")) {
+      return [savedCandidates.filter((row) => row.full_name === params[0])];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO candidates")) {
+        nextId += 1;
+        savedCandidates.push({
+          id: nextId,
+          full_name: params[0],
+          dob_enc: params[3],
+          ssn_last4_enc: params[4]
+        });
+        return [{ insertId: nextId }];
+      }
+      if (sql.includes("INSERT INTO candidate_form_answers")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const { server, baseUrl } = await startServer();
+  const firstRes = await fetch(`${baseUrl}/api/hr/applications`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      fullName: "Mixed Type Candidate",
+      dob: "1992-12-31",
+      ssnLast4: "7788",
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    })
+  });
+  const firstBody = await firstRes.json();
+  assert.equal(firstRes.status, 200);
+  assert.equal(firstBody.duplicateFlag, false);
+
+  const secondRes = await fetch(`${baseUrl}/api/hr/applications`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      fullName: "Mixed Type Candidate",
+      dob: "1992-12-31",
+      ssnLast4: 7788,
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    })
+  });
+  const secondBody = await secondRes.json();
+  assert.equal(secondRes.status, 200);
+  assert.equal(secondBody.duplicateFlag, true);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
+});
+
 test("GET /api/search returns 401 when unauthenticated", async () => {
   const { server, baseUrl } = await startServer();
   const response = await fetch(`${baseUrl}/api/search?q=test`);
@@ -1295,9 +1382,53 @@ test("POST /api/notifications/offline-queue rejects unsupported channel", async 
   pool.execute = originalExecute;
 });
 
-test("POST /api/notifications/offline-queue/retry processes retries and statuses", async () => {
+test("POST /api/notifications/offline-queue/retry does not mutate queued rows", async () => {
+  const token = jwt.sign({ sub: 33, sessionId: "sess-offline-retry-queued" }, config.jwtSecret, { expiresIn: 3600 });
+  let updateCalled = false;
+
+  pool.execute = async (sql) => {
+    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+    if (sql.includes("FROM sessions s")) {
+      return [[{
+        id: "sess-offline-retry-queued",
+        user_id: 33,
+        last_activity_at: new Date(),
+        username: "admin",
+        role: "ADMIN",
+        site_id: 1,
+        department_id: 1,
+        sensitive_data_view: 1,
+        has_sensitive_permission: 1
+      }]];
+    }
+    if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
+    if (sql.includes("FROM message_queue WHERE status = 'FAILED'")) {
+      return [[]];
+    }
+    if (sql.includes("UPDATE message_queue")) {
+      updateCalled = true;
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const { server, baseUrl } = await startServer();
+  const response = await fetch(`${baseUrl}/api/notifications/offline-queue/retry`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.processed, 0);
+  assert.equal(updateCalled, false);
+
+  await new Promise((resolve) => server.close(resolve));
+  pool.execute = originalExecute;
+});
+
+test("POST /api/notifications/offline-queue/retry processes failed retries using adapter policy", async () => {
   const token = jwt.sign({ sub: 33, sessionId: "sess-offline-retry" }, config.jwtSecret, { expiresIn: 3600 });
-  const retriedIds = [];
+  const updatesById = new Map();
 
   pool.execute = async (sql, params) => {
     if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
@@ -1315,14 +1446,14 @@ test("POST /api/notifications/offline-queue/retry processes retries and statuses
       }]];
     }
     if (sql.includes("SET last_activity_at = NOW()")) return [{ affectedRows: 1 }];
-    if (sql.includes("FROM message_queue WHERE status IN ('FAILED', 'QUEUED')")) {
+    if (sql.includes("FROM message_queue WHERE status = 'FAILED'")) {
       return [[
         { id: "msg-1", channel: "EMAIL", retry_count: 0 },
         { id: "msg-2", channel: "SMS", retry_count: 2 }
       ]];
     }
     if (sql.includes("UPDATE message_queue")) {
-      retriedIds.push(params[2]);
+      updatesById.set(params[2], { nextRetryCount: params[0], status: params[1] });
       return [{ affectedRows: 1 }];
     }
     throw new Error(`Unexpected SQL: ${sql}`);
@@ -1336,7 +1467,8 @@ test("POST /api/notifications/offline-queue/retry processes retries and statuses
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.processed, 2);
-  assert.deepEqual(retriedIds, ["msg-1", "msg-2"]);
+  assert.deepEqual(updatesById.get("msg-1"), { nextRetryCount: 1, status: "QUEUED" });
+  assert.deepEqual(updatesById.get("msg-2"), { nextRetryCount: 3, status: "FAILED" });
 
   await new Promise((resolve) => server.close(resolve));
   pool.execute = originalExecute;

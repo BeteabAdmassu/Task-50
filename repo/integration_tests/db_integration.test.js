@@ -139,7 +139,7 @@ if (!dbIntegrationEnabled) {
     }
   });
 
-  test("integration: offline queue export + retry state transitions", async () => {
+  test("integration: offline queue retry preserves queued rows and processes failed rows", async () => {
     const { server, baseUrl } = await startServer();
     try {
       const loginResult = await login(baseUrl, adminUsername, adminPassword);
@@ -170,14 +170,36 @@ if (!dbIntegrationEnabled) {
         assert.equal(retryRes.status, 200);
       }
 
-      const [[row]] = await pool.execute(
+      const [[queuedRow]] = await pool.execute(
         `SELECT retry_count, status
          FROM message_queue
          WHERE id = ?`,
         [queueBody.id]
       );
-      assert.ok(Number(row.retry_count) >= 3);
-      assert.equal(row.status, "FAILED");
+      assert.equal(Number(queuedRow.retry_count), 0);
+      assert.equal(queuedRow.status, "QUEUED");
+
+      await pool.execute(
+        `UPDATE message_queue
+         SET status = 'FAILED', retry_count = 1
+         WHERE id = ?`,
+        [queueBody.id]
+      );
+
+      const failedRetryRes = await fetch(`${baseUrl}/api/notifications/offline-queue/retry`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${loginResult.token}` }
+      });
+      assert.equal(failedRetryRes.status, 200);
+
+      const [[failedRow]] = await pool.execute(
+        `SELECT retry_count, status
+         FROM message_queue
+         WHERE id = ?`,
+        [queueBody.id]
+      );
+      assert.equal(Number(failedRow.retry_count), 2);
+      assert.equal(failedRow.status, "QUEUED");
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

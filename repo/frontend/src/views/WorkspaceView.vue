@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth.js";
 import { apiRequest } from "../api.js";
 import WorkspaceSidebar from "../components/workspace/WorkspaceSidebar.vue";
@@ -25,6 +26,8 @@ import { useSearchWorkspace } from "../composables/useSearchWorkspace.js";
 import { useAuditWorkspace } from "../composables/useAuditWorkspace.js";
 
 const auth = useAuthStore();
+const router = useRouter();
+const route = useRoute();
 const dashboard = ref({ widgets: {} });
 const activePanel = ref("overview");
 const error = ref("");
@@ -40,17 +43,49 @@ const panelsByRole = {
 };
 
 const availablePanels = computed(() => panelsByRole[auth.role] || ["overview"]);
+const displayedPanel = computed(() => {
+  if (availablePanels.value.includes(activePanel.value)) {
+    return activePanel.value;
+  }
+  return "overview";
+});
+
+function normalizePanel(rawPanel) {
+  const requested = typeof rawPanel === "string" && rawPanel.trim().length > 0
+    ? rawPanel.trim()
+    : "overview";
+  return availablePanels.value.includes(requested) ? requested : "overview";
+}
+
+function setActivePanel(nextPanel) {
+  const normalized = normalizePanel(nextPanel);
+  activePanel.value = normalized;
+  if (route.path === "/" && route.query.panel !== normalized) {
+    router.replace({ path: "/", query: { panel: normalized } });
+  }
+}
+
+watch(
+  () => route.query.panel,
+  (queryPanel) => {
+    activePanel.value = normalizePanel(queryPanel);
+  },
+  { immediate: true }
+);
 
 const {
   dockForm,
   receiptForm,
+  isSubmittingReceipt,
   receiptCloseForm,
   receiptCloseStatus,
+  isClosingReceipt,
   receiptDocumentForm,
   receiptDocuments,
   receiptDocumentStatus,
   putawayInput,
   putawayResult,
+  isRunningPutaway,
   submitDock,
   submitReceipt,
   closeReceipt,
@@ -62,13 +97,19 @@ const {
 
 const {
   mpsForm,
+  isSavingMps,
   mrpPlanId,
+  isRunningMrp,
   mrpOutput,
   workOrderForm,
+  isCreatingWorkOrder,
   workOrderEventForm,
+  isLoggingWorkOrderEvent,
   workOrderEventStatus,
   adjustmentForm,
+  isRequestingAdjustment,
   adjustmentApproveForm,
+  isApprovingAdjustment,
   adjustmentApproveStatus,
   canApproveAdjustments,
   saveMps,
@@ -123,7 +164,7 @@ async function loadDashboard() {
 
 async function logout() {
   await auth.logout();
-  window.location.href = "/login";
+  await router.push("/login");
 }
 </script>
 
@@ -133,28 +174,30 @@ async function logout() {
       :user="auth.user"
       :role="auth.role"
       :panels="availablePanels"
-      :active-panel="activePanel"
-      @update:active-panel="activePanel = $event"
+      :active-panel="displayedPanel"
+      @update:active-panel="setActivePanel"
       @logout="logout"
     />
 
     <section class="workspace-main">
       <header>
-        <h1>{{ activePanel }}</h1>
+        <h1>{{ displayedPanel }}</h1>
         <p v-if="error" class="error">{{ error }}</p>
       </header>
 
-      <OverviewPanel v-if="activePanel === 'overview'" :widgets="dashboard.widgets" />
+      <OverviewPanel v-if="displayedPanel === 'overview'" :widgets="dashboard.widgets" />
 
-      <DockPanel v-if="activePanel === 'dock'" :dock-form="dockForm" :on-submit-dock="submitDock" />
+      <DockPanel v-if="displayedPanel === 'dock'" :dock-form="dockForm" :on-submit-dock="submitDock" />
 
       <ReceivingPanel
-        v-if="activePanel === 'receiving'"
+        v-if="displayedPanel === 'receiving'"
         :receipt-form="receiptForm"
         :on-submit-receipt="submitReceipt"
+        :is-submitting-receipt="isSubmittingReceipt"
         :receipt-close-form="receiptCloseForm"
         :receipt-close-status="receiptCloseStatus"
         :on-close-receipt="closeReceipt"
+        :is-closing-receipt="isClosingReceipt"
         :receipt-document-form="receiptDocumentForm"
         :receipt-documents="receiptDocuments"
         :receipt-document-status="receiptDocumentStatus"
@@ -164,43 +207,54 @@ async function logout() {
       />
 
       <PutawayPanel
-        v-if="activePanel === 'putaway'"
+        v-if="displayedPanel === 'putaway'"
         :putaway-input="putawayInput"
         :putaway-result="putawayResult"
         :on-run-putaway="runPutaway"
+        :is-running-putaway="isRunningPutaway"
       />
 
-      <MpsPanel v-if="activePanel === 'mps'" :mps-form="mpsForm" :on-save-mps="saveMps" />
+      <MpsPanel
+        v-if="displayedPanel === 'mps'"
+        :mps-form="mpsForm"
+        :on-save-mps="saveMps"
+        :is-saving-mps="isSavingMps"
+      />
 
       <MrpPanel
-        v-if="activePanel === 'mrp'"
+        v-if="displayedPanel === 'mrp'"
         :mrp-plan-id="mrpPlanId"
         :mrp-output="mrpOutput"
         :on-run-mrp="runMrp"
+        :is-running-mrp="isRunningMrp"
         @update:mrpPlanId="mrpPlanId = $event"
       />
 
       <WorkOrdersPanel
-        v-if="activePanel === 'workorders'"
+        v-if="displayedPanel === 'workorders'"
         :work-order-form="workOrderForm"
         :work-order-event-form="workOrderEventForm"
         :work-order-event-status="workOrderEventStatus"
         :on-create-work-order="createWorkOrder"
         :on-log-work-order-event="logWorkOrderEvent"
+        :is-creating-work-order="isCreatingWorkOrder"
+        :is-logging-work-order-event="isLoggingWorkOrderEvent"
       />
 
       <AdjustmentsPanel
-        v-if="activePanel === 'adjustments'"
+        v-if="displayedPanel === 'adjustments'"
         :adjustment-form="adjustmentForm"
         :on-request-adjustment="requestAdjustment"
         :can-approve="canApproveAdjustments"
         :adjustment-approve-form="adjustmentApproveForm"
         :adjustment-approve-status="adjustmentApproveStatus"
         :on-approve-adjustment="approveAdjustment"
+        :is-requesting-adjustment="isRequestingAdjustment"
+        :is-approving-adjustment="isApprovingAdjustment"
       />
 
       <CandidateApplicationPanel
-        v-if="activePanel === 'candidates' || activePanel === 'candidatePortal'"
+        v-if="displayedPanel === 'candidates' || displayedPanel === 'candidatePortal'"
         :candidate-form="candidateForm"
         :app-form-fields="appFormFields"
         :last-candidate-id="lastCandidateId"
@@ -211,17 +265,17 @@ async function logout() {
       />
 
       <InterviewerReviewPanel
-        v-if="activePanel === 'candidateReview'"
+        v-if="displayedPanel === 'candidateReview'"
         :review-form="interviewerReviewForm"
         :review-result="interviewerReviewResult"
         :review-status="interviewerReviewStatus"
         :on-load-candidate="loadInterviewerCandidate"
       />
 
-      <RulesPanel v-if="activePanel === 'rules'" :score-form="scoreForm" :on-compute-score="computeScore" />
+      <RulesPanel v-if="displayedPanel === 'rules'" :score-form="scoreForm" :on-compute-score="computeScore" />
 
       <NotificationsPanel
-        v-if="activePanel === 'notifications'"
+        v-if="displayedPanel === 'notifications'"
         :notif-form="notifForm"
         :on-subscribe-notifications="subscribeNotifications"
         :notification-query="notificationQuery"
@@ -231,14 +285,14 @@ async function logout() {
       />
 
       <SearchPanel
-        v-if="activePanel === 'search'"
+        v-if="displayedPanel === 'search'"
         :search-form="searchForm"
         :search-results="searchResults"
         :on-search-all="searchAll"
       />
 
       <AuditPanel
-        v-if="activePanel === 'audit'"
+        v-if="displayedPanel === 'audit'"
         :audit-query="auditQuery"
         :audit-page="auditPage"
         :audit-status="auditStatus"

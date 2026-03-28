@@ -8,6 +8,10 @@ defineProps({
     type: Function,
     required: true
   },
+  isSubmittingReceipt: {
+    type: Boolean,
+    default: false
+  },
   receiptCloseForm: {
     type: Object,
     required: true
@@ -19,6 +23,10 @@ defineProps({
   onCloseReceipt: {
     type: Function,
     required: true
+  },
+  isClosingReceipt: {
+    type: Boolean,
+    default: false
   },
   receiptDocumentForm: {
     type: Object,
@@ -72,11 +80,15 @@ defineProps({
       </select>
       <input v-model="line.dispositionNote" placeholder="Disposition note" />
     </div>
-    <button @click="onSubmitReceipt">Create receipt</button>
+    <button :disabled="isSubmittingReceipt" @click="onSubmitReceipt">
+      {{ isSubmittingReceipt ? "Creating..." : "Create receipt" }}
+    </button>
 
     <h3>Close receipt</h3>
     <input v-model="receiptCloseForm.receiptId" placeholder="Receipt ID" />
-    <button @click="onCloseReceipt">Close receipt</button>
+    <button :disabled="isClosingReceipt" @click="onCloseReceipt">
+      {{ isClosingReceipt ? "Closing..." : "Close receipt" }}
+    </button>
     <p v-if="receiptCloseStatus">{{ receiptCloseStatus }}</p>
 
     <h3>Receipt documents</h3>

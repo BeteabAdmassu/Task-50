@@ -307,7 +307,7 @@ export async function queueOfflineMessage(input, actor) {
 export async function retryFailedMessages(actor = null) {
   const [rows] = await pool.execute(
     `SELECT id, channel, retry_count
-     FROM message_queue WHERE status IN ('FAILED', 'QUEUED')`
+     FROM message_queue WHERE status = 'FAILED'`
   );
   for (const row of rows) {
     const adapter = getConnectorAdapter(row.channel);

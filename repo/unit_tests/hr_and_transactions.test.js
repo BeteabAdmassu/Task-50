@@ -143,6 +143,122 @@ test("createCandidateApplication marks repeated submissions as duplicate", async
   pool.getConnection = originalGetConnection;
 });
 
+test("createCandidateApplication treats numeric and string ssnLast4 as duplicate identity", async () => {
+  const storedCandidates = [];
+  let nextId = 200;
+
+  pool.execute = async (sql, params) => {
+    if (sql.includes("FROM application_form_fields")) {
+      return [[{ field_key: "work_eligibility" }]];
+    }
+    if (sql.includes("FROM candidates WHERE full_name")) {
+      return [storedCandidates.filter((row) => row.full_name === params[0])];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  const conn = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async execute(sql, params) {
+      if (sql.includes("INSERT INTO candidates")) {
+        nextId += 1;
+        storedCandidates.push({
+          id: nextId,
+          full_name: params[0],
+          dob_enc: params[3],
+          ssn_last4_enc: params[4]
+        });
+        return [{ insertId: nextId }];
+      }
+      if (sql.includes("INSERT INTO candidate_form_answers")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("INSERT INTO search_documents")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM application_attachment_requirements")) {
+        return [[{ classification: "RESUME" }]];
+      }
+      if (sql.includes("FROM candidate_attachments")) {
+        return [[]];
+      }
+      if (sql.includes("INSERT INTO audit_logs")) {
+        return [{ insertId: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }
+  };
+  pool.getConnection = async () => conn;
+
+  const first = await createCandidateApplication(
+    {
+      fullName: "Jordan TypeSafe",
+      dob: "1997-03-12",
+      ssnLast4: "7788",
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    },
+    null
+  );
+
+  const second = await createCandidateApplication(
+    {
+      fullName: "Jordan TypeSafe",
+      dob: "1997-03-12",
+      ssnLast4: 7788,
+      formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+    },
+    null
+  );
+
+  assert.equal(first.duplicateFlag, false);
+  assert.equal(second.duplicateFlag, true);
+
+  pool.execute = originalExecute;
+  pool.getConnection = originalGetConnection;
+});
+
+test("createCandidateApplication rejects invalid ssnLast4 format", async () => {
+  pool.execute = async (sql) => {
+    if (sql.includes("FROM application_form_fields")) {
+      return [[{ field_key: "work_eligibility" }]];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+
+  await assert.rejects(
+    () =>
+      createCandidateApplication(
+        {
+          fullName: "Invalid SSN",
+          dob: "1999-01-02",
+          ssnLast4: "12A4",
+          formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+        },
+        null
+      ),
+    /SSN last4 must be a 4-digit string/
+  );
+
+  await assert.rejects(
+    () =>
+      createCandidateApplication(
+        {
+          fullName: "Invalid SSN",
+          dob: "1999-01-02",
+          ssnLast4: "123",
+          formData: [{ fieldKey: "work_eligibility", fieldValue: "yes" }]
+        },
+        null
+      ),
+    /SSN last4 must be a 4-digit string/
+  );
+
+  pool.execute = originalExecute;
+});
+
 test("attachCandidateFile rejects invalid MIME type", async () => {
   await assert.rejects(
     () =>

@@ -25,3 +25,13 @@ test("allows authenticated user to access /", async () => {
   await router.push("/");
   expect(router.currentRoute.value.path).toBe("/");
 });
+
+test("redirects authenticated user away from unauthorized panel query", async () => {
+  const auth = useAuthStore();
+  auth.token = "token-2";
+  auth.user = { id: 2, username: "clerk1", role: "CLERK" };
+
+  await router.push({ path: "/", query: { panel: "audit" } });
+  expect(router.currentRoute.value.path).toBe("/");
+  expect(router.currentRoute.value.query.panel).toBe("overview");
+});

@@ -1,6 +1,7 @@
 import { beforeEach, test, expect, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
+import router from "../src/router.js";
 
 vi.mock("../src/api.js", () => ({
   apiRequest: vi.fn(async (path) => {
@@ -32,7 +33,7 @@ test("workspace shows clerk role panels", async () => {
 
   const wrapper = mount(WorkspaceView, {
     global: {
-      plugins: [pinia]
+      plugins: [pinia, router]
     }
   });
 

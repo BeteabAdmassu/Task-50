@@ -10,6 +10,8 @@ export function useReceivingWorkspace(auth) {
   });
   const receiptCloseForm = ref({ receiptId: "" });
   const receiptCloseStatus = ref("");
+  const isSubmittingReceipt = ref(false);
+  const isClosingReceipt = ref(false);
   const receiptDocumentForm = ref({
     receiptId: "",
     poLineNo: "",
@@ -23,12 +25,15 @@ export function useReceivingWorkspace(auth) {
   const receiptDocumentStatus = ref("");
   const putawayInput = ref({ sku: "", lotNo: "", quantity: 0 });
   const putawayResult = ref(null);
+  const isRunningPutaway = ref(false);
 
   async function submitDock() {
     await apiRequest("/receiving/dock-appointments", { method: "POST", body: JSON.stringify(dockForm.value) });
   }
 
   async function submitReceipt() {
+    if (isSubmittingReceipt.value) return;
+    isSubmittingReceipt.value = true;
     const payload = {
       ...receiptForm.value,
       lines: receiptForm.value.lines.map((line) => ({
@@ -38,15 +43,21 @@ export function useReceivingWorkspace(auth) {
         qtyDelta: Number(line.qtyReceived) - Number(line.qtyExpected)
       }))
     };
-    await apiRequest("/receiving/receipts", { method: "POST", body: JSON.stringify(payload) });
+    try {
+      await apiRequest("/receiving/receipts", { method: "POST", body: JSON.stringify(payload) });
+    } finally {
+      isSubmittingReceipt.value = false;
+    }
   }
 
   async function closeReceipt() {
+    if (isClosingReceipt.value) return;
     receiptCloseStatus.value = "";
     if (!receiptCloseForm.value.receiptId) {
       receiptCloseStatus.value = "Receipt ID is required.";
       return;
     }
+    isClosingReceipt.value = true;
     try {
       await apiRequest(`/receiving/receipts/${receiptCloseForm.value.receiptId}/close`, {
         method: "POST"
@@ -54,17 +65,25 @@ export function useReceivingWorkspace(auth) {
       receiptCloseStatus.value = "Receipt closed successfully.";
     } catch (err) {
       receiptCloseStatus.value = `Failed to close receipt: ${err.message}`;
+    } finally {
+      isClosingReceipt.value = false;
     }
   }
 
   async function runPutaway() {
-    putawayResult.value = await apiRequest("/receiving/putaway/recommend", {
-      method: "POST",
-      body: JSON.stringify({
-        ...putawayInput.value,
-        siteId: auth.user?.siteId || ""
-      })
-    });
+    if (isRunningPutaway.value) return;
+    isRunningPutaway.value = true;
+    try {
+      putawayResult.value = await apiRequest("/receiving/putaway/recommend", {
+        method: "POST",
+        body: JSON.stringify({
+          ...putawayInput.value,
+          siteId: auth.user?.siteId || ""
+        })
+      });
+    } finally {
+      isRunningPutaway.value = false;
+    }
   }
 
   function onReceiptDocumentFileChange(event) {
@@ -115,11 +134,14 @@ export function useReceivingWorkspace(auth) {
     receiptForm,
     receiptCloseForm,
     receiptCloseStatus,
+    isSubmittingReceipt,
+    isClosingReceipt,
     receiptDocumentForm,
     receiptDocuments,
     receiptDocumentStatus,
     putawayInput,
     putawayResult,
+    isRunningPutaway,
     submitDock,
     submitReceipt,
     closeReceipt,

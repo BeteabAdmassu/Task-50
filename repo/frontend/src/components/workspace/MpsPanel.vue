@@ -7,6 +7,10 @@ defineProps({
   onSaveMps: {
     type: Function,
     required: true
+  },
+  isSavingMps: {
+    type: Boolean,
+    default: false
   }
 });
 </script>
@@ -21,6 +25,8 @@ defineProps({
       <input v-model="week.itemCode" placeholder="Item" />
       <input v-model.number="week.plannedQty" type="number" placeholder="Qty" />
     </div>
-    <button @click="onSaveMps">Save plan</button>
+    <button :disabled="isSavingMps" @click="onSaveMps">
+      {{ isSavingMps ? "Saving..." : "Save plan" }}
+    </button>
   </article>
 </template>

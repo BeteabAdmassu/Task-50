@@ -13,6 +13,43 @@ const allowedMimeTypes = new Set(["application/pdf", "image/jpeg", "image/png"])
 const maxBytes = 20 * 1024 * 1024;
 const candidateUploadTokenTtlSeconds = 60 * 60 * 24;
 
+function normalizeDob(input) {
+  if (input instanceof Date && !Number.isNaN(input.getTime())) {
+    return input.toISOString().slice(0, 10);
+  }
+
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (!match) {
+      throw new AppError(400, "DOB must be a valid date in YYYY-MM-DD format");
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() + 1 !== month ||
+      parsed.getUTCDate() !== day
+    ) {
+      throw new AppError(400, "DOB must be a valid date in YYYY-MM-DD format");
+    }
+    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  throw new AppError(400, "DOB must be a valid date in YYYY-MM-DD format");
+}
+
+function normalizeSsnLast4(input) {
+  const value = String(input ?? "").trim();
+  if (!/^\d{4}$/.test(value)) {
+    throw new AppError(400, "SSN last4 must be a 4-digit string");
+  }
+  return value;
+}
+
 async function getRequiredAttachmentClasses(source, conn = null) {
   const queryable = conn || pool;
   const [rows] = await queryable.execute(
@@ -47,13 +84,13 @@ async function evaluateAttachmentCompleteness(candidateId, source, conn = null) 
 
 export async function createCandidateApplication(input, actor) {
   assert(input.fullName, 400, "Full name is required");
-  assert(input.dob, 400, "DOB is required");
-  assert(input.ssnLast4 && String(input.ssnLast4).length === 4, 400, "SSN last4 is required");
+  const normalizedDob = normalizeDob(input.dob);
+  const normalizedSsnLast4 = normalizeSsnLast4(input.ssnLast4);
 
   const missingRequired = await checkFormCompleteness(input.formData || []);
   assert(!missingRequired.length, 400, "Application is incomplete", { missingRequired });
 
-  const duplicate = await detectDuplicate(input.fullName, input.dob, input.ssnLast4);
+  const duplicate = await detectDuplicate(input.fullName, normalizedDob, normalizedSsnLast4);
   return withTx(async (conn) => {
     const [result] = await conn.execute(
       `INSERT INTO candidates
@@ -63,8 +100,8 @@ export async function createCandidateApplication(input, actor) {
         input.fullName,
         input.email || null,
         input.phone || null,
-        encryptString(input.dob),
-        encryptString(input.ssnLast4),
+        encryptString(normalizedDob),
+        encryptString(normalizedSsnLast4),
         input.source || "PORTAL",
         duplicate ? 1 : 0
       ]
@@ -180,12 +217,22 @@ async function checkFormCompleteness(formData) {
 }
 
 export async function detectDuplicate(fullName, dob, ssnLast4) {
+  const normalizedDob = normalizeDob(dob);
+  const normalizedSsnLast4 = normalizeSsnLast4(ssnLast4);
   const [rows] = await pool.execute(
     `SELECT id, dob_enc, ssn_last4_enc
      FROM candidates WHERE full_name = ?`,
     [fullName]
   );
-  return rows.some((row) => decryptString(row.dob_enc) === dob && decryptString(row.ssn_last4_enc) === ssnLast4);
+  return rows.some((row) => {
+    try {
+      const existingDob = normalizeDob(decryptString(row.dob_enc));
+      const existingSsnLast4 = normalizeSsnLast4(decryptString(row.ssn_last4_enc));
+      return existingDob === normalizedDob && existingSsnLast4 === normalizedSsnLast4;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function classifyAttachment(fileName) {

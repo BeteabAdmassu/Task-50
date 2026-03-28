@@ -37,3 +37,37 @@ test("config allows defaults in test mode", () => {
   );
   assert.equal(child.status, 0);
 });
+
+test("config uses deterministic encryption fallback in test mode when env is unset", () => {
+  const script = `
+    import('${configModulePath}').then(({ config }) => {
+      process.stdout.write(config.encryptionKeyHex + '\\n');
+      process.exit(0);
+    });
+  `;
+
+  const first = spawnSync(process.execPath, ["-e", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      ENCRYPTION_KEY_HEX: ""
+    }
+  });
+
+  const second = spawnSync(process.execPath, ["-e", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      ENCRYPTION_KEY_HEX: ""
+    }
+  });
+
+  assert.equal(first.status, 0);
+  assert.equal(second.status, 0);
+  const firstKey = (first.stdout || Buffer.from("")).toString().trim();
+  const secondKey = (second.stdout || Buffer.from("")).toString().trim();
+  assert.match(firstKey, /^[a-fA-F0-9]{64}$/);
+  assert.equal(firstKey, secondKey);
+});

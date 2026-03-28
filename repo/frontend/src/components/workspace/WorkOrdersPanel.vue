@@ -16,9 +16,17 @@ defineProps({
     type: Function,
     required: true
   },
+  isCreatingWorkOrder: {
+    type: Boolean,
+    default: false
+  },
   onLogWorkOrderEvent: {
     type: Function,
     required: true
+  },
+  isLoggingWorkOrderEvent: {
+    type: Boolean,
+    default: false
   }
 });
 </script>
@@ -31,7 +39,9 @@ defineProps({
     <input v-model.number="workOrderForm.qtyTarget" type="number" placeholder="Target qty" />
     <input v-model="workOrderForm.scheduledStart" type="datetime-local" />
     <input v-model="workOrderForm.scheduledEnd" type="datetime-local" />
-    <button @click="onCreateWorkOrder">Create work order</button>
+    <button :disabled="isCreatingWorkOrder" @click="onCreateWorkOrder">
+      {{ isCreatingWorkOrder ? "Creating..." : "Create work order" }}
+    </button>
 
     <h3>Log work order event</h3>
     <input v-model="workOrderEventForm.workOrderId" placeholder="Work Order ID" />
@@ -46,7 +56,9 @@ defineProps({
       :placeholder="workOrderEventForm.eventType === 'DOWNTIME' ? 'Reason code (required)' : 'Reason code (optional)'"
     />
     <textarea v-model="workOrderEventForm.notes" placeholder="Notes" />
-    <button @click="onLogWorkOrderEvent">Log event</button>
+    <button :disabled="isLoggingWorkOrderEvent" @click="onLogWorkOrderEvent">
+      {{ isLoggingWorkOrderEvent ? "Logging..." : "Log event" }}
+    </button>
     <p v-if="workOrderEventStatus">{{ workOrderEventStatus }}</p>
   </article>
 </template>
